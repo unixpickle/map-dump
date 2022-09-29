@@ -1,0 +1,104 @@
+7-Eleven
+Ace Hardware
+Advance Auto Parts
+Albertsons
+Aldi
+Amazon
+American Eagle
+Apple
+Arby's
+Auntie Anne's
+AutoZone
+Barnes & Noble
+Baskin Robbins
+Bath & Body Works
+Bed Bath & Beyond
+Best Buy
+Big Lots
+BJ's
+Build-A-Bear Workshop
+Burger King
+Burlington
+Carl's Jr.
+Chick-fil-A
+Claire's
+Costco Wholesale
+Crate & Barrel
+CVS pharmacy
+Dairy Queen
+Dick's Sporting Goods
+Dollar General
+Dollar Tree
+Domino's Pizza
+Dunkin' Donuts
+Exxon Mobil
+Five Below
+Foot Locker
+Forever 21
+GameStop
+Gap
+GNC
+Hardee's
+H-E-B
+Hobby Lobby
+Home Chef
+HomeGoods
+Homesense
+Ikea
+Ingles
+Jamba Juice
+J.C. Penney
+KFC
+Kohl's
+Kroger
+Loves
+Lowe's
+Lululemon
+Macy's
+Marshalls
+McDonald's
+Meijer
+Menards
+Michaels
+Nordstrom
+Office Depot
+Old Navy
+Olive Garden
+O'Reilly Auto Parts
+Panera Bread
+Petco
+PetSmart
+Piggly Wiggly
+Pizza Hut
+Popeyes
+Publix
+Red Lobster
+Rite Aid
+Ross
+Rue21
+Safeway
+Sam's Club
+Sephora
+Shell
+Sonic Drive-In
+Sprouts Farmers Market
+Staples
+Starbucks
+Taco Bell
+Target
+The Home Depot
+Tim Hortons
+T.J. Maxx
+T-Mobile
+Toys R Us
+Tractor Supply Co.
+Ulta Beauty
+Urban Outfitters
+Victoria's Secret
+Walgreens
+Walmart
+Wawa
+Wegmans Food Market
+Whole Foods Market
+Williams-Sonoma
+Winn-Dixie
