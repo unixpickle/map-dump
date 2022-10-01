@@ -3,11 +3,13 @@ use crate::bing_maps::{Client, MapItem};
 use crate::geo_coord::GeoBounds;
 use clap::Parser;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::{
-    fs::{remove_file, File},
+    fs::{remove_file, rename, File},
     io::AsyncWriteExt,
     spawn,
     sync::mpsc::channel,
@@ -31,21 +33,45 @@ pub struct ScrapeArgs {
     quiet: bool,
 
     #[clap(value_parser)]
-    store_name: String,
+    names_list: String,
 
     #[clap(value_parser)]
-    output_path: String,
+    output_dir: String,
 }
 
 pub async fn scrape(cli: ScrapeArgs) -> anyhow::Result<()> {
-    let mut output = File::create(&cli.output_path).await?;
+    let mut reader = File::open(&cli.names_list).await?;
+    let mut contents = String::new();
+    reader.read_to_string(&mut contents).await?;
+    drop(reader);
 
+    for store_name in contents
+        .split("\n")
+        .map(|x| x.trim_end())
+        .filter(|x| x.len() > 0)
+    {
+        let out_path = PathBuf::from(&cli.output_dir).join(format!("{}.json", store_name));
+        let out_path_str = out_path.to_str().ok_or(anyhow::Error::msg(
+            "failed to convert output path to string",
+        ))?;
+        println!("writing store {} -> {}", store_name, out_path_str);
+        scrape_single(&cli, store_name, out_path_str).await?;
+        println!("completed store: {}", store_name);
+    }
+    Ok(())
+}
+
+async fn scrape_single(
+    cli: &ScrapeArgs,
+    store_name: &str,
+    output_path: &str,
+) -> anyhow::Result<()> {
     let regions = world_regions(cli.step_size);
     let region_count = regions.lock().await.len();
     let (response_tx, response_rx) = channel((cli.parallelism as usize) * 10);
     for _ in 0..cli.parallelism {
         spawn(fetch_regions(
-            cli.store_name.clone(),
+            store_name.to_owned(),
             cli.max_subdivisions,
             cli.retries,
             regions.clone(),
@@ -55,19 +81,26 @@ pub async fn scrape(cli: ScrapeArgs) -> anyhow::Result<()> {
     // Make sure the channel is ended once all the workers finish.
     drop(response_tx);
 
-    if let result @ Err(_) = write_outputs(&cli, &mut output, response_rx, region_count).await {
-        eprintln!("deleting output due to error...");
-        drop(output);
-        remove_file(cli.output_path).await?;
+    let tmp_path = format!("{}.tmp", output_path);
+    let mut output = File::create(&tmp_path).await?;
+    let mut result = write_outputs(&cli, store_name, &mut output, response_rx, region_count).await;
+
+    // Flush before dropping to ensure the underlying file is closed.
+    result = result.and(output.flush().await.map_err(Into::into));
+    drop(output);
+
+    if result.is_err() {
+        remove_file(tmp_path).await?;
         result
     } else {
-        output.flush().await?;
+        rename(tmp_path, output_path).await?;
         Ok(())
     }
 }
 
 async fn write_outputs(
     cli: &ScrapeArgs,
+    store_name: &str,
     output: &mut File,
     mut response_rx: Receiver<bing_maps::Result<Vec<MapItem>>>,
     region_count: usize,
@@ -90,7 +123,7 @@ async fn write_outputs(
         {
             println!(
                 "store \"{}\": completed {}/{} queries ({:.3}%, found {})",
-                cli.store_name,
+                store_name,
                 completed_regions,
                 region_count,
                 100.0 * (completed_regions as f64) / (region_count as f64),
