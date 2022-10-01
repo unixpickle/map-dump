@@ -52,6 +52,11 @@ pub struct MapItem {
     pub chain_id: Option<String>,
 }
 
+pub struct PoiResult {
+    pub id: String,
+    pub name: String,
+    pub location: GeoCoord,
+}
 pub struct Client {
     client: reqwest::Client,
 }
@@ -142,6 +147,51 @@ impl Client {
         }
         Err(Error::RetryLimitExceeded)
     }
+
+    async fn micropoi_attempt(
+        &self,
+        tileid: &str,
+        query: &str,
+        chainid: Option<&str>,
+        categoryid: &str,
+    ) -> Result<Vec<PoiResult>> {
+        for retry_timeout in [0.1, 1.0, 2.0, 4.0, 8.0, 10.0, 16.0, 32.0] {
+            let raw_response = self
+                .client
+                .get("https://www.bingapis.com/api/v7/micropoi")
+                .version(Version::HTTP_11)
+                .query(&[
+                    ("tileid", tileid),
+                    ("q", query),
+                    ("chainid", chainid.unwrap_or("")),
+                    ("categoryid", categoryid),
+                    ("appid", "5BA026015AD3D08EF01FBD643CF7E9061C63A23B"),
+                ])
+                .send()
+                .await?;
+            if !raw_response.status().is_success() {
+                sleep(Duration::from_secs_f64(retry_timeout)).await;
+                continue;
+            }
+            let response = raw_response.text().await?;
+            let parsed: Value = serde_json::from_str(&response)?;
+            let results: Vec<Value> = read_object(&parsed, "results")?;
+            return results
+                .into_iter()
+                .map(|x| -> Result<PoiResult> {
+                    Ok(PoiResult {
+                        id: read_object(&x, "id")?,
+                        name: read_object(&x, "name")?,
+                        location: GeoCoord(
+                            read_object(&x, "geo.latitude")?,
+                            read_object(&x, "geo.longitude")?,
+                        ),
+                    })
+                })
+                .collect();
+        }
+        Err(Error::RetryLimitExceeded)
+    }
 }
 
 fn read_object<T: FromJSON>(root: &Value, path: &str) -> Result<T> {
@@ -200,6 +250,15 @@ impl FromJSON for String {
         match value {
             Value::String(x) => Ok(x.clone()),
             _ => Err(Error::ProcessJSON(format!("{} is not a string", value))),
+        }
+    }
+}
+
+impl FromJSON for Vec<Value> {
+    fn from_json(value: &Value) -> Result<Self> {
+        match value {
+            Value::Array(x) => Ok(x.clone()),
+            _ => Err(Error::ProcessJSON(format!("{} is not an array", value))),
         }
     }
 }
