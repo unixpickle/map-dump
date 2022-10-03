@@ -347,3 +347,16 @@ impl FromJSON for Vec<Value> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Tile;
+
+    #[test]
+    fn test_tile_quadkey() {
+        let items = [(Tile::new(3, 3, 5), "213"), (Tile::new(2, 1, 2), "21")];
+        for (tile, expected) in items {
+            assert_eq!(tile.quadkey(), expected);
+        }
+    }
+}
