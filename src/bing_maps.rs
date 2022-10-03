@@ -2,7 +2,11 @@ use reqwest::Version;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fmt::Display, time::Duration};
+use std::future::Future;
+use std::{
+    fmt::{Debug, Display, Write},
+    time::Duration,
+};
 use tokio::time::sleep;
 
 use crate::geo_coord::{GeoBounds, GeoCoord};
@@ -12,6 +16,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     HTTP(reqwest::Error),
+    RateLimited,
     RetryLimitExceeded,
     ParseJSON(serde_json::Error),
     ProcessJSON(String),
@@ -21,6 +26,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::HTTP(e) => write!(f, "error making request: {}", e),
+            Self::RateLimited => write!(f, "rate limit exceeded"),
             Self::RetryLimitExceeded => write!(f, "request retry limit exceeded"),
             Self::ParseJSON(e) => write!(f, "error parsing JSON: {}", e),
             Self::ProcessJSON(e) => write!(f, "error processing JSON structure: {}", e),
@@ -126,125 +132,150 @@ impl Client {
         &self,
         query: &str,
         bounds: &GeoBounds,
-        max_retries: i32,
+        max_retries: u32,
     ) -> Result<Vec<MapItem>> {
-        let mut retry_count = 0;
-        loop {
-            let res = self.map_search_attempt(query, bounds).await;
-            retry_count += 1;
-            if res.is_ok() || retry_count > max_retries {
-                break res;
-            } else {
-                eprintln!("retrying after error: {}", res.unwrap_err());
-                sleep(Duration::from_secs(10)).await;
-            }
-        }
+        retry_loop(max_retries, || self.map_search_attempt(query, bounds)).await
     }
 
     async fn map_search_attempt(&self, query: &str, bounds: &GeoBounds) -> Result<Vec<MapItem>> {
-        for retry_timeout in [0.1, 1.0, 2.0, 4.0, 8.0, 10.0, 16.0, 32.0] {
-            let response = self
-                .client
-                .get("https://www.bing.com/maps/overlaybfpr")
-                .version(Version::HTTP_11)
-                .query(&[
-                    ("q", query),
-                    ("filters", "direction_partner:\"maps\""),
-                    ("mapcardtitle", ""),
-                    ("p1", "[AplusAnswer]"),
-                    ("count", "100"),
-                    ("ecount", "100"),
-                    ("first", "0"),
-                    ("efirst", "1"),
-                    (
-                        "localMapView",
-                        &format!(
-                            "{:.15},{:.15},{:.15},{:.15}",
-                            bounds.1 .0, bounds.0 .1, bounds.0 .0, bounds.1 .1
-                        ),
+        let response = self
+            .client
+            .get("https://www.bing.com/maps/overlaybfpr")
+            .version(Version::HTTP_11)
+            .query(&[
+                ("q", query),
+                ("filters", "direction_partner:\"maps\""),
+                ("mapcardtitle", ""),
+                ("p1", "[AplusAnswer]"),
+                ("count", "100"),
+                ("ecount", "100"),
+                ("first", "0"),
+                ("efirst", "1"),
+                (
+                    "localMapView",
+                    &format!(
+                        "{:.15},{:.15},{:.15},{:.15}",
+                        bounds.1 .0, bounds.0 .1, bounds.0 .0, bounds.1 .1
                     ),
-                    ("ads", "0"),
-                    (
-                        "cp",
-                        &format!("{:.15}~{:.15}", bounds.mid().0, bounds.mid().1),
-                    ),
-                ])
-                .send()
-                .await?
-                .text()
-                .await?;
-            // When overloaded, the server responds with messages of the form:
-            // Ref A: DC5..................73B Ref B: AMB......06 Ref C: 2022-09-20T00:20:31Z
-            if response.starts_with("Ref A:") {
-                sleep(Duration::from_secs_f64(retry_timeout)).await;
-                continue;
-            }
-            let doc = Html::parse_fragment(&response);
-            let mut result = Vec::new();
-            for obj in doc.select(&Selector::parse("a.listings-item").unwrap()) {
-                if let Some(info_json) = obj.value().attr("data-entity") {
-                    let parsed: Value = serde_json::from_str(info_json)?;
-                    result.push(MapItem {
-                        id: read_object(&parsed, "entity.id")?,
-                        name: read_object(&parsed, "entity.title")?,
-                        location: GeoCoord(
-                            read_object(&parsed, "geometry.x")?,
-                            read_object(&parsed, "geometry.y")?,
-                        ),
-                        address: read_object(&parsed, "entity.address").ok(),
-                        phone: read_object(&parsed, "entity.phone").ok(),
-                        chain_id: read_object(&parsed, "entity.chainId").ok(),
-                    });
-                }
-            }
-            return Ok(result);
+                ),
+                ("ads", "0"),
+                (
+                    "cp",
+                    &format!("{:.15}~{:.15}", bounds.mid().0, bounds.mid().1),
+                ),
+            ])
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        // When overloaded, the server responds with messages of the form:
+        // Ref A: DC5..................73B Ref B: AMB......06 Ref C: 2022-09-20T00:20:31Z
+        if response.starts_with("Ref A:") {
+            return Err(Error::RateLimited);
         }
-        Err(Error::RetryLimitExceeded)
+
+        let doc = Html::parse_fragment(&response);
+        let mut result = Vec::new();
+        for obj in doc.select(&Selector::parse("a.listings-item").unwrap()) {
+            if let Some(info_json) = obj.value().attr("data-entity") {
+                let parsed: Value = serde_json::from_str(info_json)?;
+                result.push(MapItem {
+                    id: read_object(&parsed, "entity.id")?,
+                    name: read_object(&parsed, "entity.title")?,
+                    location: GeoCoord(
+                        read_object(&parsed, "geometry.x")?,
+                        read_object(&parsed, "geometry.y")?,
+                    ),
+                    address: read_object(&parsed, "entity.address").ok(),
+                    phone: read_object(&parsed, "entity.phone").ok(),
+                    chain_id: read_object(&parsed, "entity.chainId").ok(),
+                });
+            }
+        }
+        Ok(result)
     }
 
-    async fn micropoi_attempt(
+    async fn points_of_interest(
         &self,
-        tileid: &str,
+        tile: &Tile,
         query: &str,
         chainid: Option<&str>,
         categoryid: &str,
-    ) -> Result<Vec<PoiResult>> {
-        for retry_timeout in [0.1, 1.0, 2.0, 4.0, 8.0, 10.0, 16.0, 32.0] {
-            let raw_response = self
-                .client
-                .get("https://www.bingapis.com/api/v7/micropoi")
-                .version(Version::HTTP_11)
-                .query(&[
-                    ("tileid", tileid),
-                    ("q", query),
-                    ("chainid", chainid.unwrap_or("")),
-                    ("categoryid", categoryid),
-                    ("appid", "5BA026015AD3D08EF01FBD643CF7E9061C63A23B"),
-                ])
-                .send()
-                .await?;
-            if !raw_response.status().is_success() {
-                sleep(Duration::from_secs_f64(retry_timeout)).await;
-                continue;
-            }
-            let response = raw_response.text().await?;
-            let parsed: Value = serde_json::from_str(&response)?;
-            let results: Vec<Value> = read_object(&parsed, "results")?;
-            return results
-                .into_iter()
-                .map(|x| -> Result<PoiResult> {
-                    Ok(PoiResult {
-                        id: read_object(&x, "id")?,
-                        name: read_object(&x, "name")?,
-                        location: GeoCoord(
-                            read_object(&x, "geo.latitude")?,
-                            read_object(&x, "geo.longitude")?,
-                        ),
-                    })
-                })
-                .collect();
+        max_retries: u32,
+    ) -> Result<Vec<PointOfInterest>> {
+        retry_loop(max_retries, || {
+            self.points_of_interest_attempt(tile, query, chainid, categoryid)
+        })
+        .await
+    }
+
+    async fn points_of_interest_attempt(
+        &self,
+        tile: &Tile,
+        query: &str,
+        chainid: Option<&str>,
+        categoryid: &str,
+    ) -> Result<Vec<PointOfInterest>> {
+        let quadkey = tile.quadkey();
+        let raw_response = self
+            .client
+            .get("https://www.bingapis.com/api/v7/micropoi")
+            .version(Version::HTTP_11)
+            .query(&[
+                ("tileid", quadkey.as_ref()),
+                ("q", query),
+                ("chainid", chainid.unwrap_or("")),
+                ("categoryid", categoryid),
+                ("appid", "5BA026015AD3D08EF01FBD643CF7E9061C63A23B"),
+            ])
+            .send()
+            .await?;
+        if !raw_response.status().is_success() {
+            return Err(Error::RateLimited);
         }
-        Err(Error::RetryLimitExceeded)
+        let response = raw_response.text().await?;
+        let parsed: Value = serde_json::from_str(&response)?;
+        let results: Vec<Value> = read_object(&parsed, "results")?;
+        results
+            .into_iter()
+            .map(|x| -> Result<PointOfInterest> {
+                Ok(PointOfInterest {
+                    id: read_object(&x, "id")?,
+                    name: read_object(&x, "name")?,
+                    location: GeoCoord(
+                        read_object(&x, "geo.latitude")?,
+                        read_object(&x, "geo.longitude")?,
+                    ),
+                })
+            })
+            .collect()
+    }
+}
+
+async fn retry_loop<T: Debug, Fut: Future<Output = Result<T>>>(
+    max_retries: u32,
+    mut f: impl FnMut() -> Fut,
+) -> Result<T> {
+    let mut remaining_tries = max_retries + 1;
+    loop {
+        let mut last_result = Err(Error::RetryLimitExceeded);
+        for retry_timeout in [0.1, 1.0, 2.0, 4.0, 8.0, 10.0, 16.0, 32.0] {
+            match f().await {
+                res @ Ok(_) => return res,
+                Err(Error::RateLimited) => sleep(Duration::from_secs_f64(retry_timeout)).await,
+                res @ Err(_) => {
+                    last_result = res;
+                    break;
+                }
+            }
+        }
+        remaining_tries -= 1;
+        if remaining_tries == 0 {
+            return last_result;
+        }
+        eprintln!("retrying after error: {}", last_result.unwrap_err());
+        sleep(Duration::from_secs(10)).await;
     }
 }
 

@@ -27,7 +27,7 @@ pub struct ScrapeArgs {
     parallelism: i32,
 
     #[clap(short, long, value_parser, default_value_t = 5)]
-    retries: i32,
+    retries: u32,
 
     #[clap(short, long, value_parser)]
     quiet: bool,
@@ -142,7 +142,7 @@ fn world_regions(step_size: f64) -> Arc<Mutex<Vec<GeoBounds>>> {
 async fn fetch_regions(
     store_name: String,
     max_subdivisions: i32,
-    max_retries: i32,
+    max_retries: u32,
     tasks: Arc<Mutex<Vec<GeoBounds>>>,
     results: Sender<bing_maps::Result<Vec<MapItem>>>,
 ) {
@@ -170,7 +170,7 @@ async fn fetch_bounds_subdivided(
     client: &Client,
     query: &str,
     bounds: GeoBounds,
-    max_retries: i32,
+    max_retries: u32,
     max_subdivisions: i32,
 ) -> bing_maps::Result<Vec<MapItem>> {
     // This would be easier with recursion than a depth-first search,
