@@ -52,7 +52,61 @@ pub struct MapItem {
     pub chain_id: Option<String>,
 }
 
-pub struct PoiResult {
+pub struct Tile {
+    pub level_of_detail: u8,
+    pub x: u32,
+    pub y: u32,
+}
+
+impl Tile {
+    pub fn new(lod: u8, x: u32, y: u32) -> Tile {
+        assert!(lod > 0 && lod < 24);
+        assert!(x < (1 << lod));
+        assert!(y < (1 << lod));
+        Tile {
+            level_of_detail: lod,
+            x: x,
+            y: y,
+        }
+    }
+
+    pub fn all_tiles(lod: u8) -> Vec<Tile> {
+        let mut res = Vec::new();
+        for x in 0..(1 << lod) {
+            for y in 0..(1 << lod) {
+                res.push(Tile::new(lod, x, y));
+            }
+        }
+        res
+    }
+
+    pub fn parent(&self) -> Option<Tile> {
+        if self.level_of_detail == 1 {
+            None
+        } else {
+            Some(Tile {
+                level_of_detail: self.level_of_detail - 1,
+                x: self.x / 2,
+                y: self.y / 2,
+            })
+        }
+    }
+
+    pub fn quadkey(&self) -> String {
+        let end = char::from_digit(((self.y & 1) << 1) | (self.x & 1), 4).unwrap();
+        match self.parent() {
+            Some(parent) => {
+                let mut res = parent.quadkey();
+                res.write_char(end).unwrap();
+                res
+            }
+            None => end.into(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PointOfInterest {
     pub id: String,
     pub name: String,
     pub location: GeoCoord,
