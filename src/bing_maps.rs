@@ -111,7 +111,7 @@ impl Tile {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PointOfInterest {
     pub id: String,
     pub name: String,
@@ -196,16 +196,16 @@ impl Client {
         Ok(result)
     }
 
-    async fn points_of_interest(
+    pub async fn points_of_interest(
         &self,
         tile: &Tile,
-        query: &str,
-        chainid: Option<&str>,
-        categoryid: &str,
+        category_id: &str,
+        query: Option<&str>,
+        chain_id: Option<&str>,
         max_retries: u32,
     ) -> Result<Vec<PointOfInterest>> {
         retry_loop(max_retries, || {
-            self.points_of_interest_attempt(tile, query, chainid, categoryid)
+            self.points_of_interest_attempt(tile, category_id, query, chain_id)
         })
         .await
     }
@@ -213,9 +213,9 @@ impl Client {
     async fn points_of_interest_attempt(
         &self,
         tile: &Tile,
-        query: &str,
-        chainid: Option<&str>,
-        categoryid: &str,
+        category_id: &str,
+        query: Option<&str>,
+        chain_id: Option<&str>,
     ) -> Result<Vec<PointOfInterest>> {
         let quadkey = tile.quadkey();
         let raw_response = self
@@ -224,9 +224,9 @@ impl Client {
             .version(Version::HTTP_11)
             .query(&[
                 ("tileid", quadkey.as_ref()),
-                ("q", query),
-                ("chainid", chainid.unwrap_or("")),
-                ("categoryid", categoryid),
+                ("q", query.unwrap_or("")),
+                ("chainid", chain_id.unwrap_or("")),
+                ("categoryid", category_id),
                 ("appid", "5BA026015AD3D08EF01FBD643CF7E9061C63A23B"),
             ])
             .send()
@@ -236,20 +236,24 @@ impl Client {
         }
         let response = raw_response.text().await?;
         let parsed: Value = serde_json::from_str(&response)?;
-        let results: Vec<Value> = read_object(&parsed, "results")?;
-        results
-            .into_iter()
-            .map(|x| -> Result<PointOfInterest> {
-                Ok(PointOfInterest {
-                    id: read_object(&x, "id")?,
-                    name: read_object(&x, "name")?,
-                    location: GeoCoord(
-                        read_object(&x, "geo.latitude")?,
-                        read_object(&x, "geo.longitude")?,
-                    ),
+        if parsed.is_object() && !parsed.as_object().unwrap().contains_key("results") {
+            Ok(Vec::new())
+        } else {
+            let results: Vec<Value> = read_object(&parsed, "results")?;
+            results
+                .into_iter()
+                .map(|x| -> Result<PointOfInterest> {
+                    Ok(PointOfInterest {
+                        id: read_object(&x, "id")?,
+                        name: read_object(&x, "name")?,
+                        location: GeoCoord(
+                            read_object(&x, "geo.latitude")?,
+                            read_object(&x, "geo.longitude")?,
+                        ),
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        }
     }
 }
 
