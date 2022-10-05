@@ -1,8 +1,10 @@
+use crate::bing_maps::PointOfInterest;
 use crate::{bing_maps::MapItem, geo_coord::VecGeoCoord};
 use ndarray::{Array2, LinalgScalar};
 use serde_json::{Map, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use tokio::fs::metadata;
 
 use clap::Parser;
 use tokio::{
@@ -30,21 +32,7 @@ pub struct CoocurrenceArgs {
 
 pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     let input_dir = PathBuf::from(cli.input_dir);
-
-    let mut store_locations = HashMap::new();
-    let mut reader = read_dir(&input_dir).await?;
-    while let Some(entry) = reader.next_entry().await? {
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| anyhow::Error::msg("failed to convert strings"))?;
-        if name.starts_with(".") {
-            continue;
-        }
-        if let Some(store_name) = name.strip_suffix(".json") {
-            store_locations.insert(store_name.to_owned(), read_locations(entry.path()).await?);
-        }
-    }
+    let store_locations = read_all_store_locations(&input_dir).await?;
 
     // Get a canonical ordering of stores for the matrix.
     let mut sorted_names = store_locations
@@ -146,7 +134,59 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn read_locations(src: PathBuf) -> anyhow::Result<Vec<VecGeoCoord>> {
+async fn read_all_store_locations(
+    src: &PathBuf,
+) -> anyhow::Result<HashMap<String, Vec<VecGeoCoord>>> {
+    if metadata(src).await?.is_dir() {
+        read_all_store_locations_scrape(src).await
+    } else {
+        read_all_store_locations_discover(src).await
+    }
+}
+
+async fn read_all_store_locations_discover(
+    input_dir: &PathBuf,
+) -> anyhow::Result<HashMap<String, Vec<VecGeoCoord>>> {
+    let mut contents = Vec::new();
+    File::open(input_dir)
+        .await?
+        .read_to_end(&mut contents)
+        .await?;
+    let pois: Vec<PointOfInterest> = serde_json::from_slice(&contents)?;
+    let mut results = HashMap::new();
+    for poi in pois.into_iter() {
+        results
+            .entry(poi.name.clone())
+            .or_insert_with(Vec::new)
+            .push(poi.location.into());
+    }
+    Ok(results)
+}
+
+async fn read_all_store_locations_scrape(
+    input_dir: &PathBuf,
+) -> anyhow::Result<HashMap<String, Vec<VecGeoCoord>>> {
+    let mut store_locations = HashMap::new();
+    let mut reader = read_dir(&input_dir).await?;
+    while let Some(entry) = reader.next_entry().await? {
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::Error::msg("failed to convert strings"))?;
+        if name.starts_with(".") {
+            continue;
+        }
+        if let Some(store_name) = name.strip_suffix(".json") {
+            store_locations.insert(
+                store_name.to_owned(),
+                read_scraped_locations(&entry.path()).await?,
+            );
+        }
+    }
+    Ok(store_locations)
+}
+
+async fn read_scraped_locations(src: &PathBuf) -> anyhow::Result<Vec<VecGeoCoord>> {
     let mut reader = File::open(src).await?;
     let mut data = String::new();
     reader.read_to_string(&mut data).await?;
