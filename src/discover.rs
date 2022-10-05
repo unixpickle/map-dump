@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::bing_maps::{self, Client, PointOfInterest, Tile};
 use clap::Parser;
+use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 use tokio::{fs::File, io::AsyncWriteExt, spawn, sync::mpsc::channel};
 
@@ -33,6 +34,9 @@ pub struct DiscoverArgs {
     #[clap(short, long, value_parser)]
     quiet: bool,
 
+    #[clap(short, long, value_parser)]
+    filter_scrape: Option<String>,
+
     #[clap(value_parser)]
     output_path: String,
 }
@@ -41,6 +45,7 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
     let all_tiles = Tile::all_tiles(cli.level_of_detail);
     let total_queries = all_tiles.len();
     let queries = Arc::new(Mutex::new(all_tiles));
+    let filter = read_filtered_names(&cli.filter_scrape).await?;
 
     let (results_tx, mut results_rx) = channel(cli.parallelism as usize);
 
@@ -74,6 +79,11 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
     while let Some(item) = results_rx.recv().await {
         for result in item? {
             let name = result.name.clone();
+            if let Some(f) = &filter {
+                if f.contains(&name) {
+                    continue;
+                }
+            }
             if results.insert(result.id.clone(), result).is_none() {
                 *store_counts.entry(name).or_insert(0) += 1;
             }
@@ -104,6 +114,24 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
     writer.flush().await?;
 
     Ok(())
+}
+
+async fn read_filtered_names(
+    path_or_none: &Option<String>,
+) -> anyhow::Result<Option<HashSet<String>>> {
+    if let Some(x) = path_or_none.as_deref() {
+        let mut f = File::open(x).await?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).await?;
+        let parsed: Vec<PointOfInterest> = serde_json::from_slice(&buf)?;
+        let mut res = HashSet::new();
+        for x in parsed {
+            res.insert(x.name);
+        }
+        Ok(Some(res))
+    } else {
+        Ok(None)
+    }
 }
 
 async fn fetch_results(
