@@ -56,6 +56,8 @@ pub struct MapItem {
     pub address: Option<String>,
     pub phone: Option<String>,
     pub chain_id: Option<String>,
+    pub category_path: Option<String>,
+    pub category_name: Option<String>,
 }
 
 pub struct Tile {
@@ -190,6 +192,8 @@ impl Client {
                     address: read_object(&parsed, "entity.address").ok(),
                     phone: read_object(&parsed, "entity.phone").ok(),
                     chain_id: read_object(&parsed, "entity.chainId").ok(),
+                    category_path: read_object(&parsed, "entity.primaryCategoryPath").ok(),
+                    category_name: read_object(&parsed, "entity.primaryCategoryName").ok(),
                 });
             }
         }
