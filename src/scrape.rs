@@ -5,6 +5,7 @@ use clap::Parser;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::fs::create_dir_all;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
@@ -45,6 +46,7 @@ pub async fn scrape(cli: ScrapeArgs) -> anyhow::Result<()> {
     reader.read_to_string(&mut contents).await?;
     drop(reader);
 
+    create_dir_all(&cli.output_dir).await?;
     for store_name in contents
         .split("\n")
         .map(|x| x.trim_end())
