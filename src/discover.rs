@@ -29,7 +29,7 @@ pub struct DiscoverArgs {
     categories: String,
 
     #[clap(short, long, value_parser, default_value_t = 30)]
-    min_locations: u32,
+    min_locations: u64,
 
     #[clap(short, long, value_parser)]
     quiet: bool,
@@ -85,7 +85,7 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
                 }
             }
             if results.insert(result.id.clone(), result).is_none() {
-                *store_counts.entry(name).or_insert(0) += 1;
+                *store_counts.entry(name).or_insert(0u64) += 1;
             }
         }
         completed += 1;
@@ -102,7 +102,7 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
 
     let filtered_locations = results
         .into_values()
-        .filter(|x| store_counts[&x.name] >= cli.min_locations)
+        .filter(|x| *store_counts.get(&x.name).unwrap_or(&0) >= cli.min_locations)
         .collect::<Vec<_>>();
 
     println!("filtered to {} points", filtered_locations.len());
