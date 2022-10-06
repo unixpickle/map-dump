@@ -166,6 +166,7 @@ impl Client {
                     &format!("{:.15}~{:.15}", bounds.mid().0, bounds.mid().1),
                 ),
             ])
+            .timeout(Duration::from_secs(30))
             .send()
             .await?
             .text()
@@ -233,6 +234,7 @@ impl Client {
                 ("categoryid", category_id),
                 ("appid", "5BA026015AD3D08EF01FBD643CF7E9061C63A23B"),
             ])
+            .timeout(Duration::from_secs(30))
             .send()
             .await?;
         if !raw_response.status().is_success() {
