@@ -9,8 +9,11 @@ use tokio::{fs::File, io::AsyncWriteExt, spawn, sync::mpsc::channel};
 
 #[derive(Clone, Parser)]
 pub struct DiscoverArgs {
-    #[clap(short, long, value_parser, default_value_t = 3)]
-    level_of_detail: u8,
+    #[clap(short, long, value_parser, default_value_t = 8)]
+    base_level_of_detail: u8,
+
+    #[clap(short, long, value_parser, default_value_t = 10)]
+    full_level_of_detail: u8,
 
     #[clap(short, long, value_parser, default_value_t = 8)]
     parallelism: i32,
@@ -34,7 +37,7 @@ pub struct DiscoverArgs {
     #[clap(short, long, value_parser)]
     quiet: bool,
 
-    #[clap(short, long, value_parser)]
+    #[clap(long, value_parser)]
     filter_scrape: Option<String>,
 
     #[clap(value_parser)]
@@ -42,7 +45,7 @@ pub struct DiscoverArgs {
 }
 
 pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
-    let all_tiles = Tile::all_tiles(cli.level_of_detail);
+    let all_tiles = Tile::all_tiles(cli.base_level_of_detail);
     let total_queries = all_tiles.len();
     let queries = Arc::new(Mutex::new(all_tiles));
     let filter = read_filtered_names(&cli.filter_scrape).await?;
@@ -62,7 +65,16 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
             let client = Client::new();
             while let Some(tile) = pop_task(&queries_clone).await {
                 if results_tx_clone
-                    .send(fetch_results(&client, &categories, tile, max_retries).await)
+                    .send(
+                        fetch_results(
+                            &client,
+                            &categories,
+                            tile,
+                            cli.full_level_of_detail,
+                            max_retries,
+                        )
+                        .await,
+                    )
                     .await
                     .is_err()
                 {
@@ -142,13 +154,28 @@ async fn fetch_results(
     client: &Client,
     categories: &Vec<String>,
     tile: Tile,
+    full_level_of_detail: u8,
     max_retries: u32,
 ) -> bing_maps::Result<Vec<PointOfInterest>> {
+    let mut sub_tiles = Vec::new();
+    tile.children_at_lod(full_level_of_detail, &mut sub_tiles);
+
     let mut res = Vec::new();
     for category in categories {
         let sub_results = client
             .points_of_interest(&tile, category, None, None, max_retries)
             .await?;
+        // Only search deeper if some results were found at the base
+        // level of detail.
+        if sub_results.len() > 0 {
+            for child in sub_tiles.iter() {
+                res.extend(
+                    client
+                        .points_of_interest(child, category, None, None, max_retries)
+                        .await?,
+                );
+            }
+        }
         res.extend(sub_results);
     }
     Ok(res)

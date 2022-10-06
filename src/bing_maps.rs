@@ -60,6 +60,7 @@ pub struct MapItem {
     pub category_name: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct Tile {
     pub level_of_detail: u8,
     pub x: u32,
@@ -97,6 +98,43 @@ impl Tile {
                 x: self.x / 2,
                 y: self.y / 2,
             })
+        }
+    }
+
+    pub fn children(&self) -> [Tile; 4] {
+        let lod = self.level_of_detail + 1;
+        [
+            Tile {
+                level_of_detail: lod,
+                x: self.x << 1,
+                y: self.y << 1,
+            },
+            Tile {
+                level_of_detail: lod,
+                x: (self.x << 1) + 1,
+                y: self.y << 1,
+            },
+            Tile {
+                level_of_detail: lod,
+                x: self.x << 1,
+                y: (self.y << 1) + 1,
+            },
+            Tile {
+                level_of_detail: lod,
+                x: (self.x << 1) + 1,
+                y: (self.y << 1) + 1,
+            },
+        ]
+    }
+
+    pub fn children_at_lod(&self, level_of_detail: u8, out: &mut Vec<Tile>) {
+        assert!(self.level_of_detail <= level_of_detail);
+        if self.level_of_detail == level_of_detail {
+            out.push(self.clone());
+        } else {
+            for child in self.children() {
+                child.children_at_lod(level_of_detail, out);
+            }
         }
     }
 
