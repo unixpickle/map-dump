@@ -84,9 +84,13 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
                     continue;
                 }
             }
-            if results.insert(result.id.clone(), result).is_none() {
-                *store_counts.entry(name).or_insert(0u64) += 1;
+            if let Some(old) = results.insert(result.id.clone(), result) {
+                // It's possible the old entry has a different name than the
+                // new one, even though the ID is the same. Perhaps this
+                // happens when the store's metadata is updated.
+                *store_counts.get_mut(&old.name).unwrap() -= 1;
             }
+            *store_counts.entry(name).or_insert(0u64) += 1;
         }
         completed += 1;
         if !cli.quiet {
@@ -102,7 +106,7 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
 
     let filtered_locations = results
         .into_values()
-        .filter(|x| *store_counts.get(&x.name).unwrap_or(&0) >= cli.min_locations)
+        .filter(|x| store_counts[&x.name] >= cli.min_locations)
         .collect::<Vec<_>>();
 
     println!("filtered to {} points", filtered_locations.len());
