@@ -101,7 +101,7 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
         for result in item? {
             let name = result.name.clone();
             if let Some(f) = &filter {
-                if f.contains(&name) {
+                if !f.contains(&name.to_lowercase()) {
                     continue;
                 }
             }
@@ -151,7 +151,7 @@ async fn read_filtered_names(
         let parsed: Vec<PointOfInterest> = serde_json::from_slice(&buf)?;
         let mut res = HashSet::new();
         for x in parsed {
-            res.insert(x.name);
+            res.insert(x.name.to_lowercase());
         }
         Ok(Some(res))
     } else {
