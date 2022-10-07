@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::bing_maps::{self, Client, PointOfInterest, Tile};
 use clap::Parser;
+use rand::{seq::SliceRandom, thread_rng};
 use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 use tokio::{fs::File, io::AsyncWriteExt, spawn, sync::mpsc::channel};
@@ -45,9 +46,17 @@ pub struct DiscoverArgs {
 }
 
 pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
-    let all_tiles = Tile::all_tiles(cli.base_level_of_detail);
+    let mut all_tiles = Tile::all_tiles(cli.base_level_of_detail);
     let total_queries = all_tiles.len();
+
+    // By shuffling the tiles, we make the progress less bursty, and
+    // outputs from the start of the program can be used to predict the
+    // duration and final number of results.
+    all_tiles.shuffle(&mut thread_rng());
     let queries = Arc::new(Mutex::new(all_tiles));
+
+    // A filter may be provided to use only certain store names.
+    // This can save memory when scraping very many levels of detail.
     let filter = read_filtered_names(&cli.filter_scrape).await?;
 
     let (results_tx, mut results_rx) = channel(cli.parallelism as usize);
