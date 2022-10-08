@@ -533,6 +533,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "ndarray",
+ "num-traits",
  "rand 0.8.5",
  "reqwest",
  "scraper",

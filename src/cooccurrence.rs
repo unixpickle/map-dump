@@ -28,11 +28,16 @@ pub struct CoocurrenceArgs {
 
     #[clap(short, long, value_parser, default_value_t = 8)]
     workers: i32,
+
+    #[clap(short, long)]
+    sparse_out: bool,
 }
 
 pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     let input_dir = PathBuf::from(cli.input_dir);
     let store_locations = read_all_store_locations(&input_dir).await?;
+
+    println!("loaded {} locations", store_locations.len());
 
     // Get a canonical ordering of stores for the matrix.
     let mut sorted_names = store_locations
@@ -119,11 +124,11 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         ),
         (
             "pair_counts".to_owned(),
-            Value::from(matrix_vec(pair_counts)),
+            Value::from(matrix_vec(pair_counts, cli.sparse_out)),
         ),
         (
             "binary_counts".to_owned(),
-            Value::from(matrix_vec(binary_counts)),
+            Value::from(matrix_vec(binary_counts, cli.sparse_out)),
         ),
     ]));
     let serialized = serde_json::to_string(&result_dict)?;
@@ -199,9 +204,29 @@ async fn read_scraped_locations(src: &PathBuf) -> anyhow::Result<Vec<VecGeoCoord
     Ok(result?)
 }
 
-fn matrix_vec<T: LinalgScalar>(matrix: Array2<T>) -> Vec<Vec<T>> {
-    return matrix
-        .outer_iter()
-        .map(|x| x.iter().map(|x| *x).collect())
-        .collect();
+fn matrix_vec<T: LinalgScalar + Into<Value>>(matrix: Array2<T>, sparse: bool) -> Value {
+    if !sparse {
+        matrix
+            .outer_iter()
+            .map(|x| x.iter().map(|x| *x).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+            .into()
+    } else {
+        // Create a COO sparse matrix which is easily loadable
+        // in PyTorch's sparse Tensor API.
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut values = Vec::new();
+        for ((row, col), value) in matrix.indexed_iter() {
+            if !value.is_zero() {
+                rows.push(row);
+                cols.push(col);
+                values.push(*value);
+            }
+        }
+        Value::Object(Map::from_iter([
+            ("indices".to_owned(), Value::from(vec![rows, cols])),
+            ("values".to_owned(), Value::from(values)),
+        ]))
+    }
 }
