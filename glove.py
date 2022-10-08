@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--iters", type=int, default=300)
+    parser.add_argument("--dense", action="store_true")
     parser.add_argument("cooc_path")
     parser.add_argument("output_path")
     args = parser.parse_args()
@@ -34,6 +35,9 @@ def main():
     print("pre-computing weights and targets...")
     targets = cooc.log_cooc()
     weights = cooc.loss_weights(cutoff=args.x_max, power=args.alpha)
+    if args.dense:
+        targets = targets.to_dense()
+        weights = weights.to_dense()
 
     print("creating parameters and optimizer...")
     n_vocab = len(cooc.store_names)
@@ -46,16 +50,26 @@ def main():
 
     print("optimizing...")
     for i in range(args.iters):
-        biases = bias_lr_boost * sparse_bias_sum(
-            cooc.cooccurrences, vecs_bias, contexts_bias
-        )
-        # Work-around for the fact that there is no gradient for to_sparse_csr().
-        zero_biases = torch.zeros_like(biases).to_sparse_csr()
-        pred = (
-            torch.sparse.sampled_addmm(zero_biases, vecs, contexts.T).to_sparse_coo()
-            + biases
-        )
-        loss = (weights * ((pred - targets) ** 2)).values().mean()
+        if args.dense:
+            biases = bias_lr_boost * (vecs_bias[:, None] + contexts_bias)
+            pred = (vecs @ contexts.T) + biases
+        else:
+            biases = bias_lr_boost * sparse_bias_sum(
+                cooc.cooccurrences, vecs_bias, contexts_bias
+            )
+            # Work-around for the fact that there is no gradient for to_sparse_csr().
+            zero_biases = torch.zeros_like(biases).to_sparse_csr()
+            pred = (
+                torch.sparse.sampled_addmm(
+                    zero_biases, vecs, contexts.T
+                ).to_sparse_coo()
+                + biases
+            )
+        losses = weights * ((pred - targets) ** 2)
+        if args.dense:
+            loss = losses.sum()
+        else:
+            loss = losses.values().sum()
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -98,8 +112,10 @@ class Cooc:
         return cls(
             store_names=all_data["names"],
             store_counts=all_data["store_counts"],
-            cooccurrences=_matrix_from_json(
-                len(all_data["names"]), all_data["binary_counts"], device
+            cooccurrences=_remove_diagonal(
+                _matrix_from_json(
+                    len(all_data["names"]), all_data["binary_counts"], device
+                )
             ),
         )
 
@@ -135,6 +151,17 @@ def _matrix_from_json(
             values=torch.tensor(obj["values"], dtype=torch.float32, device=device),
             size=(size, size),
         ).coalesce()
+
+
+def _remove_diagonal(matrix: torch.Tensor) -> torch.Tensor:
+    values = matrix.values()
+    indices = matrix.indices()
+    non_diag = indices[0] != indices[1]
+    return torch.sparse_coo_tensor(
+        indices=indices[:, non_diag],
+        values=values[non_diag],
+        size=matrix.shape,
+    ).coalesce()
 
 
 if __name__ == "__main__":
