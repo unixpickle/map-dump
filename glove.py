@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--alpha", type=float, default=3 / 4)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--dim", type=int, default=64)
-    parser.add_argument("--iters", type=int, default=300)
+    parser.add_argument("--iters", type=int, default=5000)
     parser.add_argument("--dense", action="store_true")
     parser.add_argument("cooc_path")
     parser.add_argument("output_path")
@@ -58,10 +58,9 @@ def main():
                 cooc.cooccurrences, vecs_bias, contexts_bias
             )
             # Work-around for the fact that there is no gradient for to_sparse_csr().
-            zero_biases = torch.zeros_like(biases).to_sparse_csr()
             pred = (
                 torch.sparse.sampled_addmm(
-                    zero_biases, vecs, contexts.T
+                    (biases * 0.0).detach().to_sparse_csr(), vecs, contexts.T
                 ).to_sparse_coo()
                 + biases
             )
