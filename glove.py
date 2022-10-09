@@ -82,6 +82,8 @@ def main():
                 vecs_bias=vecs_bias.detach().cpu().numpy().tolist(),
                 contexts=contexts.detach().cpu().numpy().tolist(),
                 contexts_bias=contexts_bias.detach().cpu().numpy().tolist(),
+                store_names=cooc.store_names,
+                store_counts=cooc.store_counts,
             ),
             f,
         )
