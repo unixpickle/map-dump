@@ -22,14 +22,7 @@ pub struct DiscoverArgs {
     #[clap(short, long, value_parser, default_value_t = 5)]
     retries: u32,
 
-    // Default categories taken from here:
-    // https://github.com/morgangrobin/mcgilldemo/tree/eb268215143b54d3be628c959dab90de9765ff23#exercise-7-customizing-the-api-for-personalized-results
-    #[clap(
-        short,
-        long,
-        value_parser,
-        default_value = "90001,90012,90016,90111,90232,90243,90265,90287,90353,90408,90551,90617,90619,90661,90727,90738,90771,90793,90870,90932,90942,91457,91493,91510,91567"
-    )]
+    #[clap(short, long, value_parser, default_value = "*")]
     categories: String,
 
     #[clap(short, long, value_parser, default_value_t = 30)]
