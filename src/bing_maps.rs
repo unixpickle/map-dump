@@ -3,6 +3,8 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
+use std::mem::swap;
+use std::pin::Pin;
 use std::{
     fmt::{Debug, Display, Write},
     time::Duration,
@@ -169,12 +171,15 @@ impl Client {
     }
 
     pub async fn map_search(
-        &self,
+        &mut self,
         query: &str,
         bounds: &GeoBounds,
         max_retries: u32,
     ) -> Result<Vec<MapItem>> {
-        retry_loop(max_retries, || self.map_search_attempt(query, bounds)).await
+        self.retry_loop(max_retries, (query, bounds), |cli, (query, bounds)| {
+            Box::pin(cli.map_search_attempt(*query, *bounds))
+        })
+        .await
     }
 
     async fn map_search_attempt(&self, query: &str, bounds: &GeoBounds) -> Result<Vec<MapItem>> {
@@ -240,16 +245,20 @@ impl Client {
     }
 
     pub async fn points_of_interest(
-        &self,
+        &mut self,
         tile: &Tile,
         category_id: &str,
         query: Option<&str>,
         chain_id: Option<&str>,
         max_retries: u32,
     ) -> Result<Vec<PointOfInterest>> {
-        retry_loop(max_retries, || {
-            self.points_of_interest_attempt(tile, category_id, query, chain_id)
-        })
+        self.retry_loop(
+            max_retries,
+            (tile, category_id, query, chain_id, max_retries),
+            move |cli, (tile, category_id, query, chain_id, max_retries)| {
+                Box::pin(cli.points_of_interest_attempt(*tile, *category_id, *query, *chain_id))
+            },
+        )
         .await
     }
 
@@ -299,31 +308,44 @@ impl Client {
                 .collect()
         }
     }
-}
 
-async fn retry_loop<T: Debug, Fut: Future<Output = Result<T>>>(
-    max_retries: u32,
-    mut f: impl FnMut() -> Fut,
-) -> Result<T> {
-    let mut remaining_tries = max_retries + 1;
-    loop {
-        let mut last_result = Err(Error::RetryLimitExceeded);
-        for retry_timeout in [0.1, 1.0, 2.0, 4.0, 8.0, 10.0, 16.0, 32.0] {
-            match f().await {
-                res @ Ok(_) => return res,
-                Err(Error::RateLimited) => sleep(Duration::from_secs_f64(retry_timeout)).await,
-                res @ Err(_) => {
-                    last_result = res;
-                    break;
+    async fn retry_loop<'a, T: Debug, F, A>(&'a mut self, max_retries: u32, a: A, f: F) -> Result<T>
+    where
+        A: 'a,
+        // https://stackoverflow.com/questions/70746671/how-to-bind-lifetimes-of-futures-to-fn-arguments-in-rust
+        for<'b> F: Fn(&'b Self, &'b A) -> Pin<Box<dyn Future<Output = Result<T>> + Send + 'b>>,
+    {
+        let mut remaining_tries = max_retries + 1;
+        loop {
+            let mut last_result = Err(Error::RetryLimitExceeded);
+            for retry_timeout in [0.1, 1.0, 2.0, 4.0, 8.0, 10.0, 16.0, 32.0] {
+                match f(self, &a).await {
+                    res @ Ok(_) => return res,
+                    Err(Error::RateLimited) => sleep(Duration::from_secs_f64(retry_timeout)).await,
+                    res @ Err(_) => {
+                        last_result = res;
+                        break;
+                    }
                 }
             }
+            last_result = self.reset_client_on_err(last_result);
+            remaining_tries -= 1;
+            if remaining_tries == 0 {
+                return last_result;
+            }
+            eprintln!("retrying after error: {}", last_result.unwrap_err());
+            sleep(Duration::from_secs(10)).await;
         }
-        remaining_tries -= 1;
-        if remaining_tries == 0 {
-            return last_result;
+    }
+
+    fn reset_client_on_err<T>(&mut self, res: Result<T>) -> Result<T> {
+        match res {
+            x @ Err(Error::HTTP(_)) => {
+                swap(&mut self.client, &mut reqwest::Client::new());
+                x
+            }
+            x => x,
         }
-        eprintln!("retrying after error: {}", last_result.unwrap_err());
-        sleep(Duration::from_secs(10)).await;
     }
 }
 

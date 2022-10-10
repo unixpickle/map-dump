@@ -71,12 +71,12 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
             .collect::<Vec<_>>();
         let max_retries = cli.retries;
         spawn(async move {
-            let client = Client::new();
+            let mut client = Client::new();
             while let Some(tile) = pop_task(&queries_clone).await {
                 if results_tx_clone
                     .send(
                         fetch_results(
-                            &client,
+                            &mut client,
                             &categories,
                             tile,
                             cli.full_level_of_detail,
@@ -160,7 +160,7 @@ async fn read_filtered_names(
 }
 
 async fn fetch_results(
-    client: &Client,
+    client: &mut Client,
     categories: &Vec<String>,
     tile: Tile,
     full_level_of_detail: u8,

@@ -148,11 +148,16 @@ async fn fetch_regions(
     tasks: Arc<Mutex<Vec<GeoBounds>>>,
     results: Sender<bing_maps::Result<Vec<MapItem>>>,
 ) {
-    let client = Client::new();
+    let mut client = Client::new();
     while let Some(bounds) = pop_task(&tasks).await {
-        let response =
-            fetch_bounds_subdivided(&client, &store_name, bounds, max_retries, max_subdivisions)
-                .await;
+        let response = fetch_bounds_subdivided(
+            &mut client,
+            &store_name,
+            bounds,
+            max_retries,
+            max_subdivisions,
+        )
+        .await;
         let was_ok = response.is_ok();
         if results.send(response).await.is_err() || !was_ok {
             // If we cannot send, it means the main coroutine died
@@ -169,7 +174,7 @@ async fn pop_task(tasks: &Arc<Mutex<Vec<GeoBounds>>>) -> Option<GeoBounds> {
 }
 
 async fn fetch_bounds_subdivided(
-    client: &Client,
+    client: &mut Client,
     query: &str,
     bounds: GeoBounds,
     max_retries: u32,
