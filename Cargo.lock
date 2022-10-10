@@ -532,6 +532,8 @@ dependencies = [
  "clap",
  "futures-core",
  "futures-util",
+ "http",
+ "hyper",
  "ndarray",
  "num-traits",
  "rand 0.8.5",
@@ -540,6 +542,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]
