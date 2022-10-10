@@ -254,8 +254,8 @@ impl Client {
     ) -> Result<Vec<PointOfInterest>> {
         self.retry_loop(
             max_retries,
-            (tile, category_id, query, chain_id, max_retries),
-            move |cli, (tile, category_id, query, chain_id, max_retries)| {
+            (tile, category_id, query, chain_id),
+            move |cli, (tile, category_id, query, chain_id)| {
                 Box::pin(cli.points_of_interest_attempt(*tile, *category_id, *query, *chain_id))
             },
         )
