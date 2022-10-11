@@ -1,3 +1,4 @@
+mod array_util;
 mod bing_maps;
 mod clean;
 mod cooccurrence;

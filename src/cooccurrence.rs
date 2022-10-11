@@ -1,6 +1,7 @@
+use crate::array_util::matrix_to_json;
 use crate::bing_maps::PointOfInterest;
 use crate::{bing_maps::MapItem, geo_coord::VecGeoCoord};
-use ndarray::{Array2, LinalgScalar};
+use ndarray::Array2;
 use serde_json::{Map, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
@@ -124,11 +125,11 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         ),
         (
             "pair_counts".to_owned(),
-            Value::from(matrix_vec(pair_counts, cli.sparse_out)),
+            matrix_to_json(&pair_counts, cli.sparse_out),
         ),
         (
             "binary_counts".to_owned(),
-            Value::from(matrix_vec(binary_counts, cli.sparse_out)),
+            matrix_to_json(&binary_counts, cli.sparse_out),
         ),
     ]));
     let serialized = serde_json::to_string(&result_dict)?;
@@ -202,31 +203,4 @@ async fn read_scraped_locations(src: &PathBuf) -> anyhow::Result<Vec<VecGeoCoord
         .map(|x| serde_json::from_str::<MapItem>(&x).map(|x| x.location.into()))
         .collect::<Result<Vec<_>, _>>();
     Ok(result?)
-}
-
-fn matrix_vec<T: LinalgScalar + Into<Value>>(matrix: Array2<T>, sparse: bool) -> Value {
-    if !sparse {
-        matrix
-            .outer_iter()
-            .map(|x| x.iter().map(|x| *x).collect::<Vec<_>>())
-            .collect::<Vec<_>>()
-            .into()
-    } else {
-        // Create a COO sparse matrix which is easily loadable
-        // in PyTorch's sparse Tensor API.
-        let mut rows = Vec::new();
-        let mut cols = Vec::new();
-        let mut values = Vec::new();
-        for ((row, col), value) in matrix.indexed_iter() {
-            if !value.is_zero() {
-                rows.push(row);
-                cols.push(col);
-                values.push(*value);
-            }
-        }
-        Value::Object(Map::from_iter([
-            ("indices".to_owned(), Value::from(vec![rows, cols])),
-            ("values".to_owned(), Value::from(values)),
-        ]))
-    }
 }
