@@ -30,13 +30,16 @@ pub struct CoocurrenceArgs {
     #[clap(short, long, value_parser, default_value_t = 8)]
     workers: i32,
 
+    #[clap(short, long, value_parser, default_value_t = 0)]
+    min_count: usize,
+
     #[clap(short, long)]
     sparse_out: bool,
 }
 
 pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     let input_dir = PathBuf::from(cli.input_dir);
-    let store_locations = read_all_store_locations(&input_dir).await?;
+    let store_locations = read_all_store_locations(&input_dir, cli.min_count).await?;
 
     println!("loaded {} locations", store_locations.len());
 
@@ -66,7 +69,7 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         let cos_radius = cli.radius.cos();
         let cur_index_clone = cur_index.clone();
         spawn_blocking(move || {
-            let mut pair_count = Array2::<f64>::zeros((num_stores, num_stores));
+            let mut pair_count = HashMap::<(usize, usize), f32>::new();
             let mut binary_count = pair_count.clone();
             loop {
                 let src = cur_index_clone.fetch_add(1, Ordering::SeqCst);
@@ -87,13 +90,15 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
                     if src_loc.cos_geo_dist(dst_loc) > cos_radius {
                         bin_row[*dst_store] = 1.0;
                         if src > dst {
-                            pair_count[(*src_store, *dst_store)] += 1.0;
-                            pair_count[(*dst_store, *src_store)] += 1.0;
+                            *pair_count.entry((*src_store, *dst_store)).or_default() += 1.0;
+                            *pair_count.entry((*dst_store, *src_store)).or_default() += 1.0;
                         }
                     }
                 }
                 for (i, x) in bin_row.iter().enumerate() {
-                    binary_count[(*src_store, i)] += *x;
+                    if *x > 0.0 {
+                        *binary_count.entry((*src_store, i)).or_default() += *x;
+                    }
                 }
             }
             results_tx_clone
@@ -104,11 +109,15 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     // Make sure we don't block on reading results.
     drop(results_tx);
 
-    let mut pair_counts = Array2::<f64>::zeros((store_locations.len(), store_locations.len()));
+    let mut pair_counts = Array2::<f32>::zeros((store_locations.len(), store_locations.len()));
     let mut binary_counts = pair_counts.clone();
     while let Some((pair_count, binary_count)) = results_rx.recv().await {
-        pair_counts = pair_counts + pair_count;
-        binary_counts = binary_counts + binary_count;
+        for (idx, count) in pair_count.into_iter() {
+            pair_counts[idx] += count;
+        }
+        for (idx, count) in binary_count.into_iter() {
+            binary_counts[idx] += count;
+        }
     }
 
     println!("serializing resulting matrix to {}...", cli.output_path);
@@ -142,12 +151,17 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
 
 async fn read_all_store_locations(
     src: &PathBuf,
+    min_count: usize,
 ) -> anyhow::Result<HashMap<String, Vec<VecGeoCoord>>> {
-    if metadata(src).await?.is_dir() {
-        read_all_store_locations_scrape(src).await
+    let all_results = if metadata(src).await?.is_dir() {
+        read_all_store_locations_scrape(src).await?
     } else {
-        read_all_store_locations_discover(src).await
-    }
+        read_all_store_locations_discover(src).await?
+    };
+    Ok(all_results
+        .into_iter()
+        .filter(|(_, locations)| locations.len() >= min_count)
+        .collect())
 }
 
 async fn read_all_store_locations_discover(
