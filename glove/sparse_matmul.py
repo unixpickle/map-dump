@@ -33,7 +33,14 @@ class SparseMatmul:
             block_flat_indices = local_indices[0] * block_cols + local_indices[1]
             self._block_take_indices.append(block_flat_indices)
             new_out_indices.append(required_indices)
-        self._out_indices = torch.cat(new_out_indices, dim=1)
+        output_order = torch.cat(new_out_indices, dim=1)
+
+        # We want the sparse matmul to have the same output
+        # order as the output pattern.
+        self._output_perm = _output_permutation(
+            self._out_size, all_indices, output_order
+        )
+        self._output_indices = all_indices
 
     def mm(self, m1: torch.Tensor, m2: torch.Tensor) -> torch.Tensor:
         assert m1.shape[0] == self._out_size
@@ -41,14 +48,16 @@ class SparseMatmul:
         assert m1.shape[1] == m2.shape[0]
 
         outs = []
-        for (row, col), take_indices in zip(self._iterate_blocks(), self._block_take_indices):
+        for (row, col), take_indices in zip(
+            self._iterate_blocks(), self._block_take_indices
+        ):
             sub_rows = m1[row : row + self._block_size]
             sub_cols = m2[:, col : col + self._block_size]
             outs.append(IndexedMatmul.apply(sub_rows, sub_cols, take_indices))
 
         return torch.sparse_coo_tensor(
-            indices=self._out_indices,
-            values=torch.cat(outs, dim=0),
+            indices=self._output_indices,
+            values=torch.cat(outs, dim=0)[self._output_perm],
             size=(self._out_size,) * 2,
         ).coalesce()
 
@@ -81,3 +90,17 @@ class IndexedMatmul(torch.autograd.Function):
             out = (m1_req @ m2_req).reshape(-1)[indices]
         m1_grad, m2_grad = torch.autograd.grad(out, (m1_req, m2_req), grad_output)
         return m1_grad, m2_grad, None
+
+
+def _output_permutation(
+    size: int, dst_indices: torch.Tensor, src_indices: torch.Tensor
+):
+    raw_dst = dst_indices[0] * size + dst_indices[1]
+    raw_src = src_indices[0] * size + src_indices[1]
+
+    dst_perm = torch.argsort(raw_dst)
+    src_perm = torch.argsort(raw_src)
+    out_perm = torch.zeros_like(dst_perm)
+    out_perm[dst_perm] = src_perm
+
+    return out_perm
