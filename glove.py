@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--iters", type=int, default=5000)
     parser.add_argument("--dense", action="store_true")
+    parser.add_argument("--adam", action="store_true")
     parser.add_argument("cooc_path")
     parser.add_argument("output_path")
     args = parser.parse_args()
@@ -35,9 +36,11 @@ def main():
     print("pre-computing weights and targets...")
     targets = cooc.log_cooc()
     weights = cooc.loss_weights(cutoff=args.x_max, power=args.alpha)
+    num_nonzero = weights.values().shape[0]
     if args.dense:
         targets = targets.to_dense()
         weights = weights.to_dense()
+    print(f" - density fraction: {num_nonzero / (cooc.cooccurrences.shape[0] ** 2)}")
 
     print("creating parameters and optimizer...")
     n_vocab = len(cooc.store_names)
@@ -46,7 +49,8 @@ def main():
     contexts = nn.Parameter(torch.randn(n_vocab, args.dim, device=device))
     contexts_bias = nn.Parameter(torch.zeros(n_vocab, device=device))
     bias_lr_boost = math.sqrt(args.dim)
-    opt = optim.Adagrad([vecs, vecs_bias, contexts, contexts_bias], lr=args.lr)
+    params = [vecs, vecs_bias, contexts, contexts_bias]
+    opt = (optim.Adam if args.adam else optim.Adagrad)(params, lr=args.lr)
 
     print("optimizing...")
     for i in range(args.iters):
