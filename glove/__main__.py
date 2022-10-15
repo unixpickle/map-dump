@@ -13,6 +13,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from .sparse_matmul import SparseMatmul
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -40,6 +42,8 @@ def main():
     if args.dense:
         targets = targets.to_dense()
         weights = weights.to_dense()
+    else:
+        sparse_mm = SparseMatmul(targets)
     print(f" - density fraction: {num_nonzero / (cooc.cooccurrences.shape[0] ** 2)}")
 
     print("creating parameters and optimizer...")
@@ -61,13 +65,7 @@ def main():
             biases = bias_lr_boost * sparse_bias_sum(
                 cooc.cooccurrences, vecs_bias, contexts_bias
             )
-            # Work-around for the fact that there is no gradient for to_sparse_csr().
-            pred = (
-                torch.sparse.sampled_addmm(
-                    (biases * 0.0).detach().to_sparse_csr(), vecs, contexts.T
-                ).to_sparse_coo()
-                + biases
-            )
+            pred = sparse_mm.mm(vecs, contexts.T) + biases
         losses = weights * ((pred - targets) ** 2)
         if args.dense:
             loss = losses.sum()
