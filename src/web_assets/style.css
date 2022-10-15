@@ -1,0 +1,179 @@
+/* Overall page layout */
+
+html,
+body {
+    font-family: sans-serif;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    background-color: #f0f0f0;
+}
+
+#container {
+    position: relative;
+    background-color: white;
+    padding: 10px;
+    min-height: 100%;
+}
+
+@media screen and (max-width: 620px) {
+    #container {
+        width: calc(100% - 20px);
+    }
+}
+
+@media screen and (min-width: 620px) {
+    #container {
+        width: 580px;
+        margin: 10px auto;
+    }
+}
+
+/* Search and suggestions */
+
+#search-container {
+    position: absolute;
+    width: calc(100% - 20px);
+}
+
+#search-container.active {
+    box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.2);
+}
+
+#search-container.active #suggestions {
+    display: block;
+}
+
+#search-box {
+    box-sizing: border-box;
+    border: 1px solid #d5d5d5;
+    width: 100%;
+    color: #555;
+}
+
+#search-box:focus {
+    outline: 0;
+}
+
+#search-box::placeholder {
+    color: #999;
+}
+
+#search-box:-ms-input-placeholder {
+    color: #999;
+}
+
+#search-box::-ms-input-placeholder {
+    color: #999;
+}
+
+#suggestions {
+    display: none;
+    width: 100%;
+    max-height: 200px;
+    overflow-y: scroll;
+    box-sizing: border-box;
+    border: 1px solid #d5d5d5;
+}
+
+.suggestion {
+    box-sizing: border-box;
+    width: 100%;
+    border-bottom: 1px solid #f9f9f9;
+    color: #999;
+    background-color: white;
+}
+
+.suggestion-cur {
+    background-color: #f0f0f0;
+}
+
+#search-box,
+.suggestion {
+    padding: 0 10px;
+    font-size: 30px;
+    line-height: 40px;
+}
+
+/* Logic to display correct results */
+
+#results-error {
+    display: none;
+}
+
+#results-loading {
+    display: none;
+}
+
+#results-data {
+    display: block;
+}
+
+#results.error #results-error {
+    display: block;
+}
+
+#results.error #results-data {
+    display: none;
+}
+
+#results.loading #results-loading {
+    display: block;
+}
+
+#results.loading #results-data {
+    display: none;
+}
+
+/* Results table */
+
+#results {
+    /* Make room for search box */
+    margin-top: 40px;
+
+    box-sizing: border-box;
+    padding: 10px;
+}
+
+#results .table-switcher {
+    text-align: center;
+}
+
+#results .table-switcher select {
+    margin-bottom: 10px;
+    padding: 5px;
+}
+
+#results a {
+    color: #54a8e4;
+}
+
+#results a:hover {
+    color: #3b749d;
+    cursor: pointer;
+}
+
+#results table {
+    margin: auto;
+    max-width: 100%;
+    border-collapse: collapse;
+}
+
+#results table td,
+#results table th {
+    text-align: left;
+    padding: 10px;
+    border-top: 1px solid #ddd;
+}
+
+#results table thead tr:first-child {
+    text-align: center;
+}
+
+#results table tr:nth-child(2n) {
+    background-color: #f9f9f9;
+}
+
+#results table .row-end {
+    padding-right: 10px;
+}

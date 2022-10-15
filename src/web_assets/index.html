@@ -2,8 +2,24 @@
 <html>
     <head>
         <meta charset="utf-8">
+
+        <!-- This makes the site big enough on mobile to be usable -->
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+        <script src="script.js"></script>
+        <link rel="stylesheet" type="text/css" href="style.css">
     </head>
     <body>
-        Hello, world!
+        <div id="container">
+            <div id="search-container" class="active">
+                <input id="search-box" placeholder="Type a location name..." autocomplete="off" autofocus>
+                <div id="suggestions"></div>
+            </div>
+            <div id="results">
+                <div id="results-error"></div>
+                <div id="results-data">Please enter a query.</div>
+                <div id="results-loading">Loading...</div>
+            </div>
+        </div>
     </body>
 </html>
