@@ -5,6 +5,7 @@ mod cooccurrence;
 mod discover;
 mod geo_coord;
 mod scrape;
+mod task_queue;
 mod website;
 
 use clap::Parser;

@@ -1,14 +1,13 @@
 use crate::bing_maps;
 use crate::bing_maps::{Client, MapItem};
 use crate::geo_coord::GeoBounds;
+use crate::task_queue::TaskQueue;
 use clap::Parser;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::fs::create_dir_all;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
 use tokio::{
     fs::{remove_file, rename, File},
     io::AsyncWriteExt,
@@ -25,7 +24,7 @@ pub struct ScrapeArgs {
     step_size: f64,
 
     #[clap(short, long, value_parser, default_value_t = 4)]
-    parallelism: i32,
+    parallelism: u32,
 
     #[clap(short, long, value_parser, default_value_t = 5)]
     retries: u32,
@@ -69,7 +68,7 @@ async fn scrape_single(
     output_path: &str,
 ) -> anyhow::Result<()> {
     let regions = world_regions(cli.step_size);
-    let region_count = regions.lock().await.len();
+    let region_count = regions.len().await;
     let (response_tx, response_rx) = channel((cli.parallelism as usize) * 10);
     for _ in 0..cli.parallelism {
         spawn(fetch_regions(
@@ -136,20 +135,19 @@ async fn write_outputs(
     Ok(())
 }
 
-fn world_regions(step_size: f64) -> Arc<Mutex<Vec<GeoBounds>>> {
-    let all_regions = GeoBounds::globe(step_size);
-    Arc::new(Mutex::new(all_regions))
+fn world_regions(step_size: f64) -> TaskQueue<GeoBounds> {
+    GeoBounds::globe(step_size).into()
 }
 
 async fn fetch_regions(
     store_name: String,
     max_subdivisions: i32,
     max_retries: u32,
-    tasks: Arc<Mutex<Vec<GeoBounds>>>,
+    tasks: TaskQueue<GeoBounds>,
     results: Sender<bing_maps::Result<Vec<MapItem>>>,
 ) {
     let mut client = Client::new();
-    while let Some(bounds) = pop_task(&tasks).await {
+    while let Some(bounds) = tasks.pop().await {
         let response = fetch_bounds_subdivided(
             &mut client,
             &store_name,
@@ -167,10 +165,6 @@ async fn fetch_regions(
             break;
         }
     }
-}
-
-async fn pop_task(tasks: &Arc<Mutex<Vec<GeoBounds>>>) -> Option<GeoBounds> {
-    tasks.lock().await.pop()
 }
 
 async fn fetch_bounds_subdivided(

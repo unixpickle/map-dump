@@ -1,11 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use crate::bing_maps::{self, Client, PointOfInterest, Tile};
+use crate::task_queue::TaskQueue;
 use clap::Parser;
 use rand::{seq::SliceRandom, thread_rng};
 use tokio::io::AsyncReadExt;
-use tokio::sync::Mutex;
 use tokio::{fs::File, io::AsyncWriteExt, spawn, sync::mpsc::channel};
 
 #[derive(Clone, Parser)]
@@ -17,7 +16,7 @@ pub struct DiscoverArgs {
     full_level_of_detail: u8,
 
     #[clap(short, long, value_parser, default_value_t = 8)]
-    parallelism: i32,
+    parallelism: u32,
 
     #[clap(short, long, value_parser, default_value_t = 5)]
     retries: u32,
@@ -46,7 +45,7 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
     // outputs from the start of the program can be used to predict the
     // duration and final number of results.
     all_tiles.shuffle(&mut thread_rng());
-    let queries = Arc::new(Mutex::new(all_tiles));
+    let queries: TaskQueue<Tile> = all_tiles.into();
 
     // A filter may be provided to use only certain store names.
     // This can save memory when scraping very many levels of detail.
@@ -65,7 +64,7 @@ pub async fn discover(cli: DiscoverArgs) -> anyhow::Result<()> {
         let max_retries = cli.retries;
         spawn(async move {
             let mut client = Client::new();
-            while let Some(tile) = pop_task(&queries_clone).await {
+            while let Some(tile) = queries_clone.pop().await {
                 if results_tx_clone
                     .send(
                         fetch_results(
@@ -181,8 +180,4 @@ async fn fetch_results(
         res.extend(sub_results);
     }
     Ok(res)
-}
-
-async fn pop_task(tasks: &Arc<Mutex<Vec<Tile>>>) -> Option<Tile> {
-    tasks.lock().await.pop()
 }
