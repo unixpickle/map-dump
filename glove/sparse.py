@@ -1,6 +1,67 @@
-from typing import Tuple
+from dataclasses import dataclass
+from typing import Tuple, Union
 
 import torch
+
+
+@dataclass
+class SparseMatrix:
+    """
+    Similar to PyTorch's sparse COO Tensors, but with stronger assumptions and
+    seemingly more stable CUDA support.
+    """
+
+    shape: Tuple[int, int]
+    indices: torch.Tensor  # [2 x N]
+    values: torch.Tensor  # [N]
+
+    def sum(self) -> torch.Tensor:
+        return self.values.sum()
+
+    def to_dense(self) -> torch.Tensor:
+        res = torch.zeros(
+            self.shape, dtype=self.values.dtype, device=self.values.device
+        )
+        res[self.indices[0], self.indices[1]] = self.values
+        return res
+
+    def __mul__(self, other: Union[float, "SparseMatrix"]) -> "SparseMatrix":
+        return self._run_op(other, lambda x, y: x * y)
+
+    def __rmul__(self, other: Union[float, "SparseMatrix"]) -> "SparseMatrix":
+        return self.__mul__(other)
+
+    def __add__(self, other: "SparseMatrix") -> "SparseMatrix":
+        assert isinstance(other, SparseMatrix)
+        return self._run_op(other, lambda x, y: x + y)
+
+    def __sub__(self, other: "SparseMatrix") -> "SparseMatrix":
+        assert isinstance(other, SparseMatrix)
+        return self._run_op(other, lambda x, y: x - y)
+
+    def __pow__(self, other: Union[float, "SparseMatrix"]) -> "SparseMatrix":
+        return self._run_op(other, lambda x, y: x**y)
+
+    def _run_op(self, other, op_fn):
+        if isinstance(other, SparseMatrix):
+            _check_compatible(self, other)
+            return SparseMatrix(
+                shape=self.shape,
+                indices=self.indices,
+                values=op_fn(self.values, other.values),
+            )
+        else:
+            return SparseMatrix(
+                shape=self.shape,
+                indices=self.indices,
+                values=op_fn(self.values, other),
+            )
+
+
+def _check_compatible(m1: SparseMatrix, m2: SparseMatrix):
+    assert m1.shape == m2.shape
+    assert m1.indices.shape == m2.indices.shape
+    assert m1.indices is m2.indices or (m1.indices == m2.indices).all().item()
 
 
 class SparseMatmul:
@@ -8,12 +69,12 @@ class SparseMatmul:
     Multiply two dense matrices into a sparse output matrix.
     """
 
-    def __init__(self, output_pattern: torch.Tensor, block_size: int = 512):
+    def __init__(self, output_pattern: SparseMatrix, block_size: int = 2048):
         assert output_pattern.shape[0] == output_pattern.shape[1]
         self._block_size = block_size
         self._out_size = output_pattern.shape[0]
 
-        all_indices = output_pattern.indices()
+        all_indices = output_pattern.indices
 
         self._block_take_indices = []
         new_out_indices = []
@@ -42,7 +103,7 @@ class SparseMatmul:
         )
         self._output_indices = all_indices
 
-    def mm(self, m1: torch.Tensor, m2: torch.Tensor) -> torch.Tensor:
+    def mm(self, m1: torch.Tensor, m2: torch.Tensor) -> SparseMatrix:
         assert m1.shape[0] == self._out_size
         assert m2.shape[1] == self._out_size
         assert m1.shape[1] == m2.shape[0]
@@ -55,11 +116,11 @@ class SparseMatmul:
             sub_cols = m2[:, col : col + self._block_size]
             outs.append(IndexedMatmul.apply(sub_rows, sub_cols, take_indices))
 
-        return torch.sparse_coo_tensor(
+        return SparseMatrix(
+            shape=(self._out_size,) * 2,
             indices=self._output_indices,
             values=torch.cat(outs, dim=0)[self._output_perm],
-            size=(self._out_size,) * 2,
-        ).coalesce()
+        )
 
     def _iterate_blocks(self) -> Tuple[int, int]:
         for row in range(0, self._out_size, self._block_size):

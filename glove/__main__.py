@@ -7,13 +7,13 @@ import argparse
 import json
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Union
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from .sparse_matmul import SparseMatmul
+from .sparse import SparseMatmul, SparseMatrix
 
 
 def main():
@@ -38,7 +38,7 @@ def main():
     print("pre-computing weights and targets...")
     targets = cooc.log_cooc()
     weights = cooc.loss_weights(cutoff=args.x_max, power=args.alpha)
-    num_nonzero = weights.values().shape[0]
+    num_nonzero = weights.values.shape[0]
     if args.dense:
         targets = targets.to_dense()
         weights = weights.to_dense()
@@ -67,10 +67,7 @@ def main():
             )
             pred = sparse_mm.mm(vecs, contexts.T) + biases
         losses = weights * ((pred - targets) ** 2)
-        if args.dense:
-            loss = losses.sum()
-        else:
-            loss = losses.values().sum()
+        loss = losses.sum()
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -92,21 +89,21 @@ def main():
 
 
 def sparse_bias_sum(
-    target_mat: torch.Tensor, row_bias: torch.Tensor, col_bias: torch.Tensor
-) -> torch.Tensor:
-    indices = target_mat.indices()
-    return torch.sparse_coo_tensor(
+    target_mat: SparseMatrix, row_bias: torch.Tensor, col_bias: torch.Tensor
+) -> SparseMatrix:
+    indices = target_mat.indices
+    return SparseMatrix(
+        shape=target_mat.shape,
         indices=indices,
         values=row_bias[indices[0]] + col_bias[indices[1]],
-        size=target_mat.shape,
-    ).coalesce()
+    )
 
 
 @dataclass
 class Cooc:
     store_names: List[str]
     store_counts: List[int]
-    cooccurrences: torch.Tensor  # must be coalesced sparse COO tensor
+    cooccurrences: SparseMatrix
 
     @classmethod
     def load(cls, path: str, device: torch.device) -> "Cooc":
@@ -122,49 +119,51 @@ class Cooc:
             ),
         )
 
-    def log_cooc(self) -> torch.Tensor:
-        return torch.sparse_coo_tensor(
-            indices=self.cooccurrences.indices(),
-            values=self.cooccurrences.values().log(),
-            size=self.cooccurrences.shape,
-        ).coalesce()
+    def log_cooc(self) -> SparseMatrix:
+        return SparseMatrix(
+            shape=self.cooccurrences.shape,
+            indices=self.cooccurrences.indices,
+            values=self.cooccurrences.values.log(),
+        )
 
-    def loss_weights(self, cutoff: float, power: float) -> torch.Tensor:
-        values = (self.cooccurrences.values().clamp(max=cutoff) / cutoff) ** power
-        indices = self.cooccurrences.indices()
-
-        # Remove the diagonal of the matrix.
-        mask = indices[0] == indices[1]
-        values[mask] = 0.0
-        return torch.sparse_coo_tensor(
-            indices=indices, values=values, size=self.cooccurrences.shape
-        ).coalesce()
+    def loss_weights(self, cutoff: float, power: float) -> SparseMatrix:
+        values = (self.cooccurrences.values.clamp(max=cutoff) / cutoff) ** power
+        return SparseMatrix(
+            shape=self.cooccurrences.shape,
+            indices=self.cooccurrences.indices,
+            values=values,
+        )
 
 
 def _matrix_from_json(
     size: int, obj: Union[Dict[str, Any], List[List[float]]], device=torch.device
-) -> torch.Tensor:
+) -> SparseMatrix:
     if isinstance(obj, list):
-        return (
+        sparse_tensor = (
             torch.tensor(obj, dtype=torch.float32, device=device).to_sparse().coalesce()
         )
+        return SparseMatrix(
+            shape=sparse_tensor.shape,
+            indices=sparse_tensor.indices().clone(),
+            values=sparse_tensor.values().clone(),
+        )
     else:
-        return torch.sparse_coo_tensor(
+        return SparseMatrix(
+            shape=(size, size),
             indices=torch.tensor(obj["indices"], dtype=torch.long, device=device),
             values=torch.tensor(obj["values"], dtype=torch.float32, device=device),
-            size=(size, size),
-        ).coalesce()
+        )
 
 
-def _remove_diagonal(matrix: torch.Tensor) -> torch.Tensor:
-    values = matrix.values()
-    indices = matrix.indices()
+def _remove_diagonal(matrix: SparseMatrix) -> SparseMatrix:
+    values = matrix.values
+    indices = matrix.indices
     non_diag = indices[0] != indices[1]
-    return torch.sparse_coo_tensor(
+    return SparseMatrix(
+        shape=matrix.shape,
         indices=indices[:, non_diag],
         values=values[non_diag],
-        size=matrix.shape,
-    ).coalesce()
+    )
 
 
 if __name__ == "__main__":
