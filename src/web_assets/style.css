@@ -6,12 +6,11 @@ body {
     width: 100%;
     padding: 0;
     margin: 0;
-    background-color: #f0f0f0;
+    background-color: white;
 }
 
 #container {
     position: relative;
-    background-color: white;
     padding: 10px;
     min-height: 100%;
 }
@@ -129,7 +128,7 @@ body {
 
 #results {
     /* Make room for search box */
-    margin-top: 40px;
+    margin-top: 60px;
 
     box-sizing: border-box;
     padding: 10px;
@@ -144,6 +143,10 @@ body {
     padding: 5px;
 }
 
+#results .table-switcher label {
+    margin-right: 5px;
+}
+
 #results a {
     color: #54a8e4;
 }
@@ -155,7 +158,7 @@ body {
 
 #results table {
     margin: auto;
-    max-width: 100%;
+    width: 100%;
     border-collapse: collapse;
 }
 

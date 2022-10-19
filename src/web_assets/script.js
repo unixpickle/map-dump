@@ -1,3 +1,5 @@
+const MAX_SUGGESTIONS = 50;
+
 const DOWN_KEY = 40;
 const UP_KEY = 38;
 const ENTER_KEY = 13;
@@ -5,35 +7,70 @@ const ENTER_KEY = 13;
 class App {
     constructor() {
         this.searchBox = new SearchBox();
+        this.historyManager = new HistoryManager();
         this.results = document.getElementById('results');
         this.resultsError = document.getElementById('results-error');
         this.resultsData = document.getElementById('results-data');
 
-        this.searchBox.onSearch = (query) => this.searchQuery(query);
+        this.searchBox.onSearch = (query) => {
+            this.searchQuery(query);
+            this.historyManager.update(query);
+        };
+        this.historyManager.onChange = (query) => this.showNewQuery(query);
+        if (this.historyManager.query) {
+            this.showNewQuery(this.historyManager.query);
+        } else {
+            this.searchBox.focus();
+        }
     }
 
     async searchQuery(query) {
         this.results.classList.remove('error');
         this.results.classList.add('loading');
         this.searchBox.setLoading(true);
+
+        const cleanup = () => {
+            this.searchBox.setLoading(false);
+            this.results.classList.remove('loading');
+        };
+
         let table;
         try {
-            table = await createNeighborTable(query, (q) => this.showNewQuery(q));
+            table = await createNeighborTable(query, (q) => {
+                this.showNewQuery(q);
+                this.historyManager.update(q);
+            });
+            if (query !== this.searchBox.getQuery()) {
+                // A new query could have been run due to a popstate.
+                return;
+            }
         } catch (e) {
             this.results.classList.add('error');
             this.resultsError.textContent = e + '';
+            cleanup();
             return;
-        } finally {
-            this.searchBox.setLoading(false);
-            this.results.classList.remove('loading');
         }
+        cleanup();
+
         this.resultsData.textContent = '';
         this.resultsData.appendChild(table);
     };
 
     showNewQuery(query) {
-        this.searchBox.setQuery(query);
-        return this.searchQuery(query);
+        if (!query) {
+            this.clearQuery();
+        } else {
+            this.searchBox.setQuery(query);
+            return this.searchQuery(query);
+        }
+    }
+
+    clearQuery() {
+        this.results.classList.remove('error', 'loading');
+        this.resultsData.textContent = '';
+        this.searchBox.setQuery('');
+        this.searchBox.setLoading(false);
+        this.searchBox.focus();
     }
 }
 
@@ -61,8 +98,20 @@ class SearchBox {
         this._querySuggestions();
     }
 
+    focus() {
+        this.input.focus();
+    }
+
+    blur() {
+        this.input.blur();
+    }
+
     setLoading(f) {
         // TODO: disable search while results are loading.
+    }
+
+    getQuery() {
+        return this.input.value;
     }
 
     setQuery(q) {
@@ -148,7 +197,7 @@ class SearchBox {
             this.suggestionContainer.classList.remove('empty');
         }
 
-        results.forEach((x, i) => {
+        results.slice(0, MAX_SUGGESTIONS).forEach((x, i) => {
             const el = document.createElement('div');
             el.textContent = x;
             el.className = 'suggestion' + (i == 0 ? ' suggestion-cur' : '');
@@ -211,6 +260,41 @@ class LocationSuggestor {
     }
 }
 
+class HistoryManager {
+    constructor() {
+        this.query = this._parseLocation();
+        this.onChange = (_) => null;
+
+        window.addEventListener('popstate', () => {
+            const newLocation = this._parseLocation();
+            if (newLocation !== this.query) {
+                this.query = newLocation;
+                this.onChange(newLocation);
+            }
+        });
+    }
+
+    update(query) {
+        if (query === this.query) {
+            return;
+        }
+        this.query = query;
+        if (!this.query) {
+            history.pushState({}, '', '');
+        } else {
+            history.pushState({}, '', '#' + encodeURIComponent(this.query));
+        }
+    }
+
+    _parseLocation() {
+        if (location.hash) {
+            return decodeURIComponent(location.hash.slice(1)) || null;
+        } else {
+            return null;
+        }
+    }
+}
+
 async function createNeighborTable(name, onQuery) {
     const numResults = 20;
     const url = '/api?f=knn&count=' + numResults + '&q=' + encodeURIComponent(name);
@@ -262,6 +346,11 @@ async function createNeighborTable(name, onQuery) {
 function tableSwitcher(names, tables) {
     const element = document.createElement('div');
     element.className = 'table-switcher';
+    const switchControls = document.createElement('div');
+    switchControls.className = 'table-switcher-controls';
+    const label = document.createElement('label');
+    label.textContent = 'Embeddings:';
+    switchControls.appendChild(label);
     const select = document.createElement('select');
     names.forEach((x, i) => {
         const option = document.createElement('option');
@@ -270,7 +359,8 @@ function tableSwitcher(names, tables) {
         select.appendChild(option);
     });
     select.value = '0';
-    element.appendChild(select);
+    switchControls.appendChild(select);
+    element.appendChild(switchControls);
 
     let curTable = null;
     const showSelected = () => {
