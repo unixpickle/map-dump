@@ -1,5 +1,6 @@
 mod array_util;
 mod bing_maps;
+mod categories;
 mod clean;
 mod cooccurrence;
 mod discover;
@@ -30,6 +31,10 @@ enum Cli {
         #[clap(flatten)]
         args: cooccurrence::CoocurrenceArgs,
     },
+    Categories {
+        #[clap(flatten)]
+        args: categories::CategoriesArgs,
+    },
     Website {
         #[clap(flatten)]
         args: website::WebsiteArgs,
@@ -44,6 +49,7 @@ async fn main() -> ExitCode {
         Cli::Cooccurrence { args } => cooccurrence::cooccurrence(args).await,
         Cli::Discover { args } => discover::discover(args).await,
         Cli::Scrape { args } => scrape::scrape(args).await,
+        Cli::Categories { args } => categories::categories(args).await,
         Cli::Website { args } => website::website(args).await,
     } {
         eprintln!("{}", e);
