@@ -139,6 +139,7 @@ struct RawEmbeddings {
 #[derive(Serialize)]
 struct KNNResults {
     query: String,
+    store_count: u64,
     results: HashMap<String, Vec<String>>,
     dots: HashMap<String, Vec<f32>>,
 }
@@ -227,6 +228,7 @@ impl Embeddings {
             }
             Ok(KNNResults {
                 query: query.to_owned(),
+                store_count: self.store_counts[*idx],
                 results: neighbors,
                 dots: dots,
             })

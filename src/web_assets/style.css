@@ -128,10 +128,17 @@ body {
 
 #results {
     /* Make room for search box */
-    margin-top: 60px;
+    margin-top: 50px;
 
     box-sizing: border-box;
     padding: 10px;
+}
+
+#results .count-label {
+    display: block;
+    text-align: center;
+    margin-bottom: 10px;
+    font-style: oblique;
 }
 
 #results .table-switcher {
@@ -179,4 +186,11 @@ body {
 
 #results table .row-end {
     padding-right: 10px;
+}
+
+#results-error,
+#results-loading {
+    font-style: oblique;
+    text-align: center;
+    font-size: 1.1em;
 }

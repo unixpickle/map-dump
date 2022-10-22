@@ -90,7 +90,6 @@ class SearchBox {
             // Delay allows clicking on a suggestion.
             setTimeout(() => this._updateFocus(), 500);
         });
-        this.input.focus();
 
         this.suggestor = new LocationSuggestor();
         this.suggestor.onSuggestions = (q, results) => this._populateSuggestions(q, results);
@@ -100,10 +99,12 @@ class SearchBox {
 
     focus() {
         this.input.focus();
+        this._updateFocus();
     }
 
     blur() {
         this.input.blur();
+        this._updateFocus();
     }
 
     setLoading(f) {
@@ -339,7 +340,15 @@ async function createNeighborTable(name, onQuery) {
             table.appendChild(body);
             return table;
         });
-        return tableSwitcher(embNames, tables);
+        const switcher = tableSwitcher(embNames, tables);
+        const countLabel = document.createElement('label');
+        countLabel.className = 'count-label';
+        countLabel.textContent = 'Found ' + results['store_count'] + ' locations named "' + results['query'] + '".'
+        const container = document.createElement('div');
+        container.className = 'results-container';
+        container.appendChild(countLabel);
+        container.appendChild(switcher);
+        return container;
     }
 }
 
