@@ -10,7 +10,11 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 from sklearn.dummy import DummyClassifier
+from sklearn.kernel_approximation import Nystroem
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC, LinearSVC
 
 
 def main():
@@ -28,9 +32,10 @@ def main():
         help="use full categories, not just general names",
     )
     parser.add_argument(
-        "--dummy",
-        action="store_true",
-        help="use a dummy classifier",
+        "--classifier",
+        type=str,
+        default="linear",
+        help="classifier type: dummy, linear, svm",
     )
     args = parser.parse_args()
 
@@ -46,17 +51,25 @@ def main():
     )
     train_data, test_data = split_dataset(filtered_ds, args.seed)
 
-    clf = (
-        DummyClassifier()
-        if args.dummy
-        else LogisticRegression(max_iter=10000, multi_class="multinomial")
-    )
+    if args.classifier == "svm":
+        clf = LinearSVC(verbose=True)
+        scaler = Nystroem(n_components=1024)
+    else:
+        clf = {
+            "dummy": DummyClassifier(),
+            "linear": LogisticRegression(max_iter=10000, multi_class="multinomial"),
+        }[args.classifier]
+        scaler = StandardScaler()
+
     print("training classifier...")
     train_xs, train_ys, train_ws = embed_dataset(embs, train_data)
-    clf.fit(train_xs, train_ys, train_ws)
+    scaler.fit(train_xs)
+    print(f"num examples: {len(train_xs)}")
+    clf.fit(scaler.transform(train_xs), train_ys, train_ws)
     print("evaluating...")
-    test_acc = clf.score(*embed_dataset(embs, test_data))
-    train_acc = clf.score(train_xs, train_ys, train_ws)
+    test_xs, test_ys, test_ws = embed_dataset(embs, test_data)
+    test_acc = clf.score(scaler.transform(test_xs), test_ys, test_ws)
+    train_acc = clf.score(scaler.transform(train_xs), train_ys, train_ws)
     print(f"mean train accuracy: {train_acc}")
     print(f"mean test accuracy: {test_acc}")
 
@@ -115,7 +128,7 @@ def embed_dataset(
         for cat in cats:
             vectors.append(vec)
             labels.append(cat)
-            weights.append(1 / len(cats))
+            weights.append(1.0 / len(cats))
     return np.stack(vectors, axis=0), np.array(labels), np.array(weights)
 
 
