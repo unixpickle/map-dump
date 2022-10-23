@@ -1,6 +1,7 @@
 use crate::array_util::matrix_to_json;
+use crate::bing_maps::MapItem;
 use crate::bing_maps::PointOfInterest;
-use crate::{bing_maps::MapItem, geo_coord::VecGeoCoord};
+use crate::geo_coord::{GeoCoord, VecGeoCoord};
 use ndarray::Array2;
 use serde_json::{Map, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -50,13 +51,14 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         .collect::<Vec<_>>();
     sorted_names.sort();
 
-    // Create a flat list of (store_index, location) pairs.
-    let mut pairs = Vec::new();
+    // Create a flat list of (store_index, latitude, location) pairs.
+    let mut flat_locations = Vec::new();
     for (i, name) in sorted_names.iter().enumerate() {
         for location in &store_locations[name] {
-            pairs.push((i, location.clone()));
+            flat_locations.push((i, location.0, VecGeoCoord::from(location)));
         }
     }
+    flat_locations.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
     println!("computing cooccurrence matrix...");
 
@@ -64,29 +66,34 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     let (results_tx, mut results_rx) = channel(cli.workers as usize);
     for _ in 0..cli.workers {
         let results_tx_clone = results_tx.clone();
-        let pairs_clone = pairs.clone();
+        let flat_locations_clone = flat_locations.clone();
         let num_stores = store_locations.len();
-        let cos_radius = cli.radius.cos();
+        let radius = cli.radius;
         let cur_index_clone = cur_index.clone();
         spawn_blocking(move || {
+            let cos_radius = radius.cos();
             let mut pair_count = HashMap::<(usize, usize), f32>::new();
             let mut binary_count = pair_count.clone();
             loop {
                 let src = cur_index_clone.fetch_add(1, Ordering::SeqCst);
-                if src % (pairs_clone.len() / 100) == 0 {
+                if src % (flat_locations_clone.len() / 100) == 0 {
                     eprintln!(
                         "done {}/{} ({:.2}%)",
                         src,
-                        pairs_clone.len(),
-                        100.0 * (src as f64) / (pairs_clone.len() as f64)
+                        flat_locations_clone.len(),
+                        100.0 * (src as f64) / (flat_locations_clone.len() as f64)
                     );
                 }
-                if src >= pairs_clone.len() {
+                if src >= flat_locations_clone.len() {
                     break;
                 }
                 let mut bin_row = vec![0.0; num_stores];
-                let (src_store, src_loc) = &pairs_clone[src];
-                for (dst, (dst_store, dst_loc)) in pairs_clone.iter().enumerate() {
+                let (src_store, src_lat, src_loc) = &flat_locations_clone[src];
+                let min_lat = src_lat - radius;
+                let max_lat = src_lat + radius;
+                for (dst, (dst_store, _, dst_loc)) in
+                    bisect_locations(&flat_locations_clone, min_lat, max_lat)
+                {
                     if src_loc.cos_geo_dist(dst_loc) > cos_radius {
                         bin_row[*dst_store] = 1.0;
                         if src > dst {
@@ -152,7 +159,7 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
 async fn read_all_store_locations(
     src: &PathBuf,
     min_count: usize,
-) -> anyhow::Result<HashMap<String, Vec<VecGeoCoord>>> {
+) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
     let all_results = if metadata(src).await?.is_dir() {
         read_all_store_locations_scrape(src).await?
     } else {
@@ -166,7 +173,7 @@ async fn read_all_store_locations(
 
 async fn read_all_store_locations_discover(
     input_dir: &PathBuf,
-) -> anyhow::Result<HashMap<String, Vec<VecGeoCoord>>> {
+) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
     let mut contents = Vec::new();
     File::open(input_dir)
         .await?
@@ -178,14 +185,14 @@ async fn read_all_store_locations_discover(
         results
             .entry(poi.name.clone())
             .or_insert_with(Vec::new)
-            .push(poi.location.into());
+            .push(poi.location);
     }
     Ok(results)
 }
 
 async fn read_all_store_locations_scrape(
     input_dir: &PathBuf,
-) -> anyhow::Result<HashMap<String, Vec<VecGeoCoord>>> {
+) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
     let mut store_locations = HashMap::new();
     let mut reader = read_dir(&input_dir).await?;
     while let Some(entry) = reader.next_entry().await? {
@@ -206,7 +213,7 @@ async fn read_all_store_locations_scrape(
     Ok(store_locations)
 }
 
-async fn read_scraped_locations(src: &PathBuf) -> anyhow::Result<Vec<VecGeoCoord>> {
+async fn read_scraped_locations(src: &PathBuf) -> anyhow::Result<Vec<GeoCoord>> {
     let mut reader = File::open(src).await?;
     let mut data = String::new();
     reader.read_to_string(&mut data).await?;
@@ -214,7 +221,30 @@ async fn read_scraped_locations(src: &PathBuf) -> anyhow::Result<Vec<VecGeoCoord
         .split("\n")
         .into_iter()
         .filter(|x| x.len() > 0)
-        .map(|x| serde_json::from_str::<MapItem>(&x).map(|x| x.location.into()))
+        .map(|x| serde_json::from_str::<MapItem>(&x).map(|x| x.location))
         .collect::<Result<Vec<_>, _>>();
     Ok(result?)
+}
+
+fn bisect_locations<'a, A, B>(
+    locs: &'a Vec<(A, f64, B)>,
+    min: f64,
+    max: f64,
+) -> impl Iterator<Item = (usize, &(A, f64, B))> + 'a {
+    let mut start = 0;
+    let mut end = locs.len();
+    while start < end {
+        let mid = (start + end) / 2;
+        let val = locs[mid].1;
+        if val < min {
+            start = mid;
+        } else {
+            end = mid;
+        }
+    }
+    locs[start..locs.len()]
+        .iter()
+        .enumerate()
+        .map(move |(i, x)| (i + start, x))
+        .take_while(move |(_, (_, x, _))| *x <= max)
 }

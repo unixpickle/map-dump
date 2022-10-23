@@ -35,8 +35,8 @@ impl VecGeoCoord {
     }
 }
 
-impl From<GeoCoord> for VecGeoCoord {
-    fn from(x: GeoCoord) -> VecGeoCoord {
+impl From<&GeoCoord> for VecGeoCoord {
+    fn from(x: &GeoCoord) -> VecGeoCoord {
         let (lat, lon) = (x.0 * PI / 180.0, x.1 * PI / 180.0);
         let z = lat.sin();
         let radius = lat.cos();
@@ -112,8 +112,8 @@ mod tests {
             (GeoCoord(10.0, -20.0), GeoCoord(-15.0, 100.0), 2.118313649),
         ];
         for (p1, p2, expected) in cases {
-            let actual = VecGeoCoord::from(p1)
-                .cos_geo_dist(&VecGeoCoord::from(p2))
+            let actual = VecGeoCoord::from(&p1)
+                .cos_geo_dist(&VecGeoCoord::from(&p2))
                 .acos();
             println!("{}, {}", actual, expected);
             assert!((actual - expected).abs() < 1e-5);
@@ -127,7 +127,7 @@ mod tests {
             GeoCoord(10.0, -20.0),
             GeoCoord(80.0, 70.0),
         ] {
-            let v = VecGeoCoord::from(gc);
+            let v = VecGeoCoord::from(&gc);
             assert!((v.cos_geo_dist(&v) - 1.0).abs() < 1e-8);
         }
     }
