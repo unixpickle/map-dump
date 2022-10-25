@@ -26,7 +26,7 @@ impl GeoCoord {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct VecGeoCoord(f64, f64, f64);
 
 impl VecGeoCoord {

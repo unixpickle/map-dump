@@ -4,6 +4,7 @@ use crate::bing_maps::PointOfInterest;
 use crate::geo_coord::{GeoCoord, VecGeoCoord};
 use ndarray::Array2;
 use serde_json::{Map, Value};
+use std::f64::consts::PI;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs::metadata;
@@ -51,14 +52,19 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         .collect::<Vec<_>>();
     sorted_names.sort();
 
-    // Create a flat list of (store_index, latitude, location) pairs.
+    // Create a flat list of all store locations, sorted by latitude
+    // for faster "nearby" lookups.
     let mut flat_locations = Vec::new();
     for (i, name) in sorted_names.iter().enumerate() {
         for location in &store_locations[name] {
-            flat_locations.push((i, location.0, VecGeoCoord::from(location)));
+            flat_locations.push(Location {
+                store_index: i,
+                latitude: location.0 * PI / 180.0,
+                location: VecGeoCoord::from(location),
+            });
         }
     }
-    flat_locations.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    flat_locations.sort_by(|a, b| a.latitude.partial_cmp(&b.latitude).unwrap());
 
     println!("computing cooccurrence matrix...");
 
@@ -88,23 +94,25 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
                     break;
                 }
                 let mut bin_row = vec![0.0; num_stores];
-                let (src_store, src_lat, src_loc) = &flat_locations_clone[src];
-                let min_lat = src_lat - radius;
-                let max_lat = src_lat + radius;
-                for (dst, (dst_store, _, dst_loc)) in
-                    bisect_locations(&flat_locations_clone, min_lat, max_lat)
-                {
-                    if src_loc.cos_geo_dist(dst_loc) > cos_radius {
-                        bin_row[*dst_store] = 1.0;
+                let src_loc = &flat_locations_clone[src];
+                let min_lat = src_loc.latitude - radius;
+                let max_lat = src_loc.latitude + radius;
+                for (dst, dst_loc) in bisect_locations(&flat_locations_clone, min_lat, max_lat) {
+                    if src_loc.location.cos_geo_dist(&dst_loc.location) > cos_radius {
+                        bin_row[dst_loc.store_index] = 1.0;
                         if src > dst {
-                            *pair_count.entry((*src_store, *dst_store)).or_default() += 1.0;
-                            *pair_count.entry((*dst_store, *src_store)).or_default() += 1.0;
+                            *pair_count
+                                .entry((src_loc.store_index, dst_loc.store_index))
+                                .or_default() += 1.0;
+                            *pair_count
+                                .entry((dst_loc.store_index, src_loc.store_index))
+                                .or_default() += 1.0;
                         }
                     }
                 }
                 for (i, x) in bin_row.iter().enumerate() {
                     if *x > 0.0 {
-                        *binary_count.entry((*src_store, i)).or_default() += *x;
+                        *binary_count.entry((src_loc.store_index, i)).or_default() += *x;
                     }
                 }
             }
@@ -226,25 +234,72 @@ async fn read_scraped_locations(src: &PathBuf) -> anyhow::Result<Vec<GeoCoord>> 
     Ok(result?)
 }
 
-fn bisect_locations<'a, A, B>(
-    locs: &'a Vec<(A, f64, B)>,
+#[derive(PartialEq, Clone, Debug)]
+struct Location {
+    store_index: usize,
+    latitude: f64, // radians
+    location: VecGeoCoord,
+}
+
+fn bisect_locations<'a>(
+    locs: &'a Vec<Location>,
     min: f64,
     max: f64,
-) -> impl Iterator<Item = (usize, &(A, f64, B))> + 'a {
-    let mut start = 0;
-    let mut end = locs.len();
-    while start < end {
-        let mid = (start + end) / 2;
-        let val = locs[mid].1;
-        if val < min {
-            start = mid;
-        } else {
-            end = mid;
-        }
-    }
+) -> impl Iterator<Item = (usize, &Location)> + 'a {
+    let start = locs.partition_point(move |x| x.latitude < min);
     locs[start..locs.len()]
         .iter()
         .enumerate()
         .map(move |(i, x)| (i + start, x))
-        .take_while(move |(_, (_, x, _))| *x <= max)
+        .take_while(move |(_, x)| x.latitude <= max)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bisect_locations, GeoCoord, Location, VecGeoCoord};
+
+    #[test]
+    fn test_bisect_locations() {
+        let locations = [-1.0, -0.99, -0.85, -0.3, 0.1, 0.5, 0.8, 0.95, 0.99]
+            .into_iter()
+            .map(|x| Location {
+                store_index: 0,
+                location: VecGeoCoord::from(&GeoCoord(x, 0.0)),
+                latitude: x,
+            })
+            .collect();
+        let cases = [
+            (-1.1, -1.0),
+            (-1.1, -0.995),
+            (-1.0, -0.99),
+            (-1.01, -0.98),
+            (-0.98, -0.5),
+            (-0.98, 1.0),
+            (0.995, 1.0),
+            (-0.2, 1.0),
+            (-0.2, 0.9),
+        ];
+        for (min, max) in cases {
+            let actual = collect_locations(bisect_locations(&locations, min, max));
+            let expected = collect_locations(bisect_locations_dummy(&locations, min, max));
+            assert_eq!(actual, expected, "bad results for case {},{}", min, max);
+        }
+    }
+
+    fn bisect_locations_dummy<'a>(
+        locs: &'a Vec<Location>,
+        min: f64,
+        max: f64,
+    ) -> impl Iterator<Item = (usize, &Location)> + 'a {
+        locs.iter()
+            .enumerate()
+            .skip_while(move |(_, x)| x.latitude < min)
+            .take_while(move |(_, x)| x.latitude <= max)
+    }
+
+    fn collect_locations<'a, I: Iterator<Item = (usize, &'a Location)>>(
+        x: I,
+    ) -> Vec<(usize, Location)> {
+        x.map(|(i, loc)| (i, loc.clone())).collect()
+    }
 }
