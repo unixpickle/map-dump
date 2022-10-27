@@ -1,8 +1,7 @@
-use crate::array_util::matrix_to_json;
+use crate::array_util::SparseMatrix;
 use crate::bing_maps::MapItem;
 use crate::bing_maps::PointOfInterest;
 use crate::geo_coord::{GeoCoord, VecGeoCoord};
-use ndarray::Array2;
 use serde_json::{Map, Value};
 use std::f64::consts::PI;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -40,9 +39,9 @@ pub struct CoocurrenceArgs {
 }
 
 pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
+    println!("loading locations from: {}", cli.input_dir);
     let input_dir = PathBuf::from(cli.input_dir);
     let store_locations = read_all_store_locations(&input_dir, cli.min_count).await?;
-
     println!("loaded {} locations", store_locations.len());
 
     // Get a canonical ordering of stores for the matrix.
@@ -78,7 +77,7 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         let cur_index_clone = cur_index.clone();
         spawn_blocking(move || {
             let cos_radius = radius.cos();
-            let mut pair_count = HashMap::<(usize, usize), f32>::new();
+            let mut pair_count = SparseMatrix::zeros((num_stores, num_stores));
             let mut binary_count = pair_count.clone();
             loop {
                 let src = cur_index_clone.fetch_add(1, Ordering::SeqCst);
@@ -101,19 +100,13 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
                     if src_loc.location.cos_geo_dist(&dst_loc.location) > cos_radius {
                         bin_row[dst_loc.store_index] = 1.0;
                         if src > dst {
-                            *pair_count
-                                .entry((src_loc.store_index, dst_loc.store_index))
-                                .or_default() += 1.0;
-                            *pair_count
-                                .entry((dst_loc.store_index, src_loc.store_index))
-                                .or_default() += 1.0;
+                            pair_count.add_entry((src_loc.store_index, dst_loc.store_index), 1.0);
+                            pair_count.add_entry((dst_loc.store_index, src_loc.store_index), 1.0);
                         }
                     }
                 }
                 for (i, x) in bin_row.iter().enumerate() {
-                    if *x > 0.0 {
-                        *binary_count.entry((src_loc.store_index, i)).or_default() += *x;
-                    }
+                    binary_count.add_entry((src_loc.store_index, i), *x);
                 }
             }
             results_tx_clone
@@ -124,15 +117,11 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     // Make sure we don't block on reading results.
     drop(results_tx);
 
-    let mut pair_counts = Array2::<f32>::zeros((store_locations.len(), store_locations.len()));
+    let mut pair_counts = SparseMatrix::zeros((store_locations.len(), store_locations.len()));
     let mut binary_counts = pair_counts.clone();
     while let Some((pair_count, binary_count)) = results_rx.recv().await {
-        for (idx, count) in pair_count.into_iter() {
-            pair_counts[idx] += count;
-        }
-        for (idx, count) in binary_count.into_iter() {
-            binary_counts[idx] += count;
-        }
+        pair_counts += &pair_count;
+        binary_counts += &binary_count;
     }
 
     println!("serializing resulting matrix to {}...", cli.output_path);
@@ -149,11 +138,11 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         ),
         (
             "pair_counts".to_owned(),
-            matrix_to_json(&pair_counts, cli.sparse_out),
+            pair_counts.to_json(cli.sparse_out),
         ),
         (
             "binary_counts".to_owned(),
-            matrix_to_json(&binary_counts, cli.sparse_out),
+            binary_counts.to_json(cli.sparse_out),
         ),
     ]));
     let serialized = serde_json::to_string(&result_dict)?;

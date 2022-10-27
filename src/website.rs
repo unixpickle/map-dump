@@ -1,4 +1,4 @@
-use crate::array_util::{matrix_to_json, normalize_rows, vec_to_matrix};
+use crate::array_util::{dense_matrix_to_json, normalize_rows, vec_to_matrix};
 use clap::Parser;
 use http::StatusCode;
 use hyper::service::{make_service_fn, service_fn};
@@ -66,7 +66,7 @@ async fn handle_request(
         let data = serde_json::to_string(
             &emb.vecs
                 .iter()
-                .map(|(name, arr)| (name, matrix_to_json(arr, false)))
+                .map(|(name, arr)| (name, dense_matrix_to_json(arr)))
                 .collect::<HashMap<_, _>>(),
         )
         .unwrap();
