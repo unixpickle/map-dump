@@ -138,11 +138,11 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         ),
         (
             "pair_counts".to_owned(),
-            pair_counts.to_json(cli.sparse_out),
+            pair_counts.into_json(cli.sparse_out),
         ),
         (
             "binary_counts".to_owned(),
-            binary_counts.to_json(cli.sparse_out),
+            binary_counts.into_json(cli.sparse_out),
         ),
     ]));
     let serialized = serde_json::to_string(&result_dict)?;

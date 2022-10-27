@@ -52,14 +52,6 @@ impl<T: LinalgScalar + Into<Value>> SparseMatrix<T> {
         };
     }
 
-    pub fn dense(&self) -> Array2<T> {
-        let mut res = Array2::<T>::zeros(self.size);
-        for ((row, col), val) in self.coord_to_data.iter() {
-            res[(*row, *col)] = *val;
-        }
-        res
-    }
-
     pub fn add_entry(&mut self, idx: (usize, usize), value: T) {
         if !value.is_zero() {
             let ptr = self.coord_to_data.entry(idx).or_insert(Zero::zero());
@@ -67,11 +59,11 @@ impl<T: LinalgScalar + Into<Value>> SparseMatrix<T> {
         }
     }
 
-    pub fn to_json(&self, sparse: bool) -> Value {
+    pub fn into_json(self, sparse: bool) -> Value {
         if sparse {
             self.into()
         } else {
-            dense_matrix_to_json(&self.dense())
+            dense_matrix_to_json(&(&self).into())
         }
     }
 }
@@ -96,21 +88,32 @@ impl<T: LinalgScalar + Into<Value>> From<&Array2<T>> for SparseMatrix<T> {
     }
 }
 
-impl<T: LinalgScalar + Into<Value>> From<&SparseMatrix<T>> for Value {
-    fn from(mat: &SparseMatrix<T>) -> Value {
-        let mut rows = Vec::new();
-        let mut cols = Vec::new();
-        let mut values = Vec::new();
-        for ((row, col), value) in mat.coord_to_data.iter() {
+impl<T: LinalgScalar + Into<Value>> From<SparseMatrix<T>> for Value {
+    fn from(mat: SparseMatrix<T>) -> Value {
+        let cap = mat.coord_to_data.len();
+        let mut rows = Vec::with_capacity(cap);
+        let mut cols = Vec::with_capacity(cap);
+        let mut values = Vec::with_capacity(cap);
+        for ((row, col), value) in mat.coord_to_data.into_iter() {
             if !value.is_zero() {
-                rows.push(*row);
-                cols.push(*col);
-                values.push(*value);
+                rows.push(row);
+                cols.push(col);
+                values.push(value);
             }
         }
         Value::Object(Map::from_iter([
             ("indices".to_owned(), Value::from(vec![rows, cols])),
             ("values".to_owned(), Value::from(values)),
         ]))
+    }
+}
+
+impl<T: LinalgScalar + Into<Value>> From<&SparseMatrix<T>> for Array2<T> {
+    fn from(mat: &SparseMatrix<T>) -> Array2<T> {
+        let mut res = Array2::<T>::zeros(mat.size);
+        for ((row, col), val) in mat.coord_to_data.iter() {
+            res[(*row, *col)] = *val;
+        }
+        res
     }
 }
