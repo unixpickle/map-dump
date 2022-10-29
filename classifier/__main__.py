@@ -6,6 +6,7 @@ from the embedding vectors.
 import argparse
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -32,6 +33,11 @@ def main():
         help="use full categories, not just general names",
     )
     parser.add_argument(
+        "--weight-num-locations",
+        action="store_true",
+        help="weight stores by number of locations",
+    )
+    parser.add_argument(
         "--classifier",
         type=str,
         default="linear",
@@ -45,7 +51,7 @@ def main():
     print("loading dataset...")
     full_ds, num_labels = load_categories(args.categories, args.full_categories)
     print(f"number of labels: {num_labels}")
-    filtered_ds = {k: v for k, v in full_ds.items() if k in embs}
+    filtered_ds = {k: v for k, v in full_ds.items() if k in embs.store_vecs}
     print(
         f"omitting {len(full_ds)-len(filtered_ds)}/{len(full_ds)} stores not present in embeddings..."
     )
@@ -62,22 +68,37 @@ def main():
         scaler = StandardScaler()
 
     print("training classifier...")
-    train_xs, train_ys, train_ws = embed_dataset(embs, train_data)
+    train_xs, train_ys, train_ws = embed_dataset(
+        embs, train_data, args.weight_num_locations
+    )
     scaler.fit(train_xs)
     print(f"num examples: {len(train_xs)}")
     clf.fit(scaler.transform(train_xs), train_ys, train_ws)
     print("evaluating...")
-    test_xs, test_ys, test_ws = embed_dataset(embs, test_data)
+    test_xs, test_ys, test_ws = embed_dataset(
+        embs, test_data, args.weight_num_locations
+    )
     test_acc = clf.score(scaler.transform(test_xs), test_ys, test_ws)
     train_acc = clf.score(scaler.transform(train_xs), train_ys, train_ws)
     print(f"mean train accuracy: {train_acc}")
     print(f"mean test accuracy: {test_acc}")
 
 
-def load_embeddings(path: str) -> Dict[str, np.ndarray]:
+@dataclass
+class Embeddings:
+    store_vecs: Dict[str, np.ndarray]
+    store_counts: Dict[str, int]
+
+
+def load_embeddings(path: str) -> Embeddings:
     with open(path, "rb") as f:
         obj = json.load(f)
-    return dict(zip(obj["store_names"], np.array(obj["vecs"], dtype=np.float32)))
+    return Embeddings(
+        store_vecs=dict(
+            zip(obj["store_names"], np.array(obj["vecs"], dtype=np.float32))
+        ),
+        store_counts=dict(zip(obj["store_names"], obj["store_counts"])),
+    )
 
 
 def load_categories(
@@ -115,7 +136,7 @@ def split_dataset(
 
 
 def embed_dataset(
-    embs: Dict[str, np.ndarray], name_to_cat: Dict[str, List[int]]
+    embs: Embeddings, name_to_cat: Dict[str, List[int]], weight_num_locations: bool
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Convert the dataset into (vectors, labels, weights).
@@ -124,11 +145,15 @@ def embed_dataset(
     labels = []
     weights = []
     for name, cats in name_to_cat.items():
-        vec = embs[name]
+        vec = embs.store_vecs[name]
+        if weight_num_locations:
+            extra_weight = embs.store_counts[name]
+        else:
+            extra_weight = 1.0
         for cat in cats:
             vectors.append(vec)
             labels.append(cat)
-            weights.append(1.0 / len(cats))
+            weights.append(extra_weight / len(cats))
     return np.stack(vectors, axis=0), np.array(labels), np.array(weights)
 
 
