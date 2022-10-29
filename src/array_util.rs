@@ -2,10 +2,13 @@ use std::collections::HashMap;
 
 use ndarray::{Array2, Axis, LinalgScalar};
 
-use num_traits::Zero;
+use num_traits::{real::Real, Zero};
 use serde_json::{Map, Value};
 
-pub fn dense_matrix_to_json<T: LinalgScalar + Into<Value>>(matrix: &Array2<T>) -> Value {
+pub trait Numeric: LinalgScalar + Real + Into<Value> {}
+impl<T> Numeric for T where T: LinalgScalar + Real + Into<Value> {}
+
+pub fn dense_matrix_to_json<T: Numeric>(matrix: &Array2<T>) -> Value {
     matrix
         .outer_iter()
         .map(|x| x.iter().map(|x| *x).collect::<Vec<_>>())
@@ -13,11 +16,11 @@ pub fn dense_matrix_to_json<T: LinalgScalar + Into<Value>>(matrix: &Array2<T>) -
         .into()
 }
 
-pub fn vec_to_matrix(v: &Vec<Vec<f32>>) -> Array2<f32> {
+pub fn vec_to_matrix<T: Numeric>(v: &Vec<Vec<T>>) -> Array2<T> {
     assert!(v.len() > 0);
     let inner_size = v[0].len();
 
-    let mut res = Array2::<f32>::zeros((v.len(), inner_size));
+    let mut res = Array2::<T>::zeros((v.len(), inner_size));
     for (i, xs) in v.iter().enumerate() {
         for (j, x) in xs.iter().enumerate() {
             *res.get_mut((i, j)).unwrap() = *x;
@@ -26,12 +29,12 @@ pub fn vec_to_matrix(v: &Vec<Vec<f32>>) -> Array2<f32> {
     res
 }
 
-pub fn normalize_rows(a: &Array2<f32>) -> Array2<f32> {
+pub fn normalize_rows<T: Numeric>(a: &Array2<T>) -> Array2<T> {
     return a / row_norms(a);
 }
 
-fn row_norms(a: &Array2<f32>) -> Array2<f32> {
-    a.map(|x| x * x)
+fn row_norms<T: Numeric>(a: &Array2<T>) -> Array2<T> {
+    a.map(|x| (*x) * (*x))
         .sum_axis(Axis(1))
         .map(|x| x.sqrt())
         .into_shape((a.shape()[0], 1))
@@ -39,12 +42,12 @@ fn row_norms(a: &Array2<f32>) -> Array2<f32> {
 }
 
 #[derive(Clone, Debug)]
-pub struct SparseMatrix<T: LinalgScalar + Into<Value>> {
+pub struct SparseMatrix<T: Numeric> {
     coord_to_data: HashMap<(usize, usize), T>,
     size: (usize, usize),
 }
 
-impl<T: LinalgScalar + Into<Value>> SparseMatrix<T> {
+impl<T: Numeric> SparseMatrix<T> {
     pub fn zeros(size: (usize, usize)) -> Self {
         return SparseMatrix {
             coord_to_data: HashMap::new(),
@@ -68,7 +71,7 @@ impl<T: LinalgScalar + Into<Value>> SparseMatrix<T> {
     }
 }
 
-impl<T: LinalgScalar + Into<Value>> std::ops::AddAssign<&SparseMatrix<T>> for SparseMatrix<T> {
+impl<T: Numeric> std::ops::AddAssign<&SparseMatrix<T>> for SparseMatrix<T> {
     fn add_assign(&mut self, rhs: &SparseMatrix<T>) {
         for ((row, col), val) in rhs.coord_to_data.iter() {
             self.add_entry((*row, *col), *val);
@@ -76,7 +79,7 @@ impl<T: LinalgScalar + Into<Value>> std::ops::AddAssign<&SparseMatrix<T>> for Sp
     }
 }
 
-impl<T: LinalgScalar + Into<Value>> From<&Array2<T>> for SparseMatrix<T> {
+impl<T: Numeric> From<&Array2<T>> for SparseMatrix<T> {
     fn from(matrix: &Array2<T>) -> SparseMatrix<T> {
         let mut res = SparseMatrix::zeros(matrix.dim());
         for ((row, col), value) in matrix.indexed_iter() {
@@ -88,7 +91,7 @@ impl<T: LinalgScalar + Into<Value>> From<&Array2<T>> for SparseMatrix<T> {
     }
 }
 
-impl<T: LinalgScalar + Into<Value>> From<SparseMatrix<T>> for Value {
+impl<T: Numeric> From<SparseMatrix<T>> for Value {
     fn from(mat: SparseMatrix<T>) -> Value {
         let cap = mat.coord_to_data.len();
         let mut rows = Vec::with_capacity(cap);
@@ -108,7 +111,7 @@ impl<T: LinalgScalar + Into<Value>> From<SparseMatrix<T>> for Value {
     }
 }
 
-impl<T: LinalgScalar + Into<Value>> From<&SparseMatrix<T>> for Array2<T> {
+impl<T: Numeric> From<&SparseMatrix<T>> for Array2<T> {
     fn from(mat: &SparseMatrix<T>) -> Array2<T> {
         let mut res = Array2::<T>::zeros(mat.size);
         for ((row, col), val) in mat.coord_to_data.iter() {
