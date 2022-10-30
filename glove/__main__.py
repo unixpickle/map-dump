@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--iters", type=int, default=5000)
     parser.add_argument("--dense", action="store_true")
     parser.add_argument("--adam", action="store_true")
+    parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("cooc_path")
     parser.add_argument("output_path")
     args = parser.parse_args()
@@ -54,7 +55,9 @@ def main():
     contexts_bias = nn.Parameter(torch.zeros(n_vocab, device=device))
     bias_lr_boost = math.sqrt(args.dim)
     params = [vecs, vecs_bias, contexts, contexts_bias]
-    opt = (optim.Adam if args.adam else optim.Adagrad)(params, lr=args.lr)
+    opt = (optim.Adam if args.adam else optim.Adagrad)(
+        params, lr=args.lr, weight_decay=args.weight_decay
+    )
 
     print("optimizing...")
     for i in range(args.iters):
