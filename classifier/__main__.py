@@ -86,7 +86,7 @@ class Embeddings:
     store_counts: Dict[str, int]
 
     @classmethod
-    def load_embeddings(cls, path: str) -> "Embeddings":
+    def load(cls, path: str) -> "Embeddings":
         with open(path, "rb") as f:
             obj = json.load(f)
         return cls(
