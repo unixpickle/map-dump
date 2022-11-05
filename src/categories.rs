@@ -24,7 +24,7 @@ pub struct CategoriesArgs {
     #[clap(short, long, value_parser, default_value_t = 0)]
     min_count: usize,
 
-    #[clap(short, long, value_parser, default_value_t = 0.25)]
+    #[clap(short, long, value_parser, default_value_t = 0.00025260179852480549)]
     radius: f64,
 
     #[clap(value_parser)]
