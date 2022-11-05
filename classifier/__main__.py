@@ -6,6 +6,7 @@ from the embedding vectors.
 import argparse
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
@@ -38,6 +39,11 @@ def main():
         help="weight stores by number of locations",
     )
     parser.add_argument(
+        "--single-example",
+        action="store_true",
+        help="use a single example per location",
+    )
+    parser.add_argument(
         "--classifier",
         type=str,
         default="linear",
@@ -68,12 +74,17 @@ def main():
         scaler = StandardScaler()
 
     print("training classifier...")
-    train_xs, train_ys, train_ws = train_data.embed(embs, args.weight_num_locations)
+    train_xs, train_ys, train_ws = train_data.embed(
+        embs, args.weight_num_locations, args.single_example
+    )
     scaler.fit(train_xs)
     print(f"num examples: {len(train_xs)}")
     clf.fit(scaler.transform(train_xs), train_ys, train_ws)
     print("evaluating...")
-    test_xs, test_ys, test_ws = test_data.embed(embs, args.weight_num_locations)
+    test_xs, test_ys, test_ws = test_data.embed(
+        embs, args.weight_num_locations, args.single_example
+    )
+    print(f"num test examples: {len(test_xs)}")
     test_acc = clf.score(scaler.transform(test_xs), test_ys, test_ws)
     train_acc = clf.score(scaler.transform(train_xs), train_ys, train_ws)
     print(f"mean train accuracy: {train_acc}")
@@ -109,6 +120,8 @@ class Dataset:
             obj = json.load(f)
         for k, vs in obj.items():
             cat_names = [v["path"] if full_categories else v["name"] for v in vs]
+            if not len(cat_names):
+                continue
             store_to_cat_names[k] = cat_names
         cat_names = sorted(set(x for y in store_to_cat_names.values() for x in y))
         cat_name_to_idx = {x: i for i, x in enumerate(cat_names)}
@@ -151,7 +164,7 @@ class Dataset:
         )
 
     def embed(
-        self, embs: Embeddings, weight_num_locations: bool
+        self, embs: Embeddings, weight_num_locations: bool, single_example: bool
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Convert the dataset into (vectors, labels, weights).
@@ -160,11 +173,16 @@ class Dataset:
         labels = []
         weights = []
         for name, cats in self.name_to_cat.items():
+            if not len(cats):
+                continue
             vec = embs.store_vecs[name]
             if weight_num_locations:
                 extra_weight = embs.store_counts[name]
             else:
                 extra_weight = 1.0
+            if single_example:
+                count_to_cat = {v: k for k, v in Counter(cats).items()}
+                cats = [count_to_cat[max(count_to_cat.keys())]]
             for cat in cats:
                 vectors.append(vec)
                 labels.append(cat)
