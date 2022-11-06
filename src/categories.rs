@@ -1,13 +1,13 @@
 use crate::bing_maps::Client;
 use crate::bing_maps::PointOfInterest;
 use crate::geo_coord::GeoBounds;
+use crate::discover::read_discover_output;
 use crate::task_queue::TaskQueue;
 use clap::Parser;
 use rand::seq::IteratorRandom;
 use rand::SeedableRng;
 use serde::Serialize;
 use std::collections::HashMap;
-use tokio::io::AsyncReadExt;
 use tokio::{fs::File, io::AsyncWriteExt, spawn, sync::mpsc::channel};
 
 #[derive(Clone, Parser)]
@@ -36,7 +36,7 @@ pub struct CategoriesArgs {
 
 pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
     println!("loading locations...");
-    let locations = read_locations(&cli.discover_out, cli.min_count).await?;
+    let locations = read_discover_output(&cli.discover_out, cli.min_count).await?;
     let total_tasks = locations.len();
     let task_queue: TaskQueue<(String, Vec<PointOfInterest>)> = locations.into();
     println!("total locations: {}", total_tasks);
@@ -98,26 +98,6 @@ pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
     out_file.flush().await?;
 
     Ok(())
-}
-
-async fn read_locations(
-    path: &str,
-    min_count: usize,
-) -> anyhow::Result<HashMap<String, Vec<PointOfInterest>>> {
-    let mut reader = File::open(path).await?;
-    let mut contents = String::new();
-    reader.read_to_string(&mut contents).await?;
-    let locations: Vec<PointOfInterest> = serde_json::from_str(&contents)?;
-    let mut res = HashMap::new();
-    for location in locations {
-        res.entry(location.name.clone())
-            .or_insert_with(Vec::new)
-            .push(location);
-    }
-    Ok(res
-        .into_iter()
-        .filter(|(_name, locations)| locations.len() >= min_count)
-        .collect())
 }
 
 #[derive(Serialize)]

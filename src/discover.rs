@@ -181,3 +181,23 @@ async fn fetch_results(
     }
     Ok(res)
 }
+
+pub async fn read_discover_output(
+    path: &str,
+    min_count: usize,
+) -> anyhow::Result<HashMap<String, Vec<PointOfInterest>>> {
+    let mut reader = File::open(path).await?;
+    let mut contents = String::new();
+    reader.read_to_string(&mut contents).await?;
+    let locations: Vec<PointOfInterest> = serde_json::from_str(&contents)?;
+    let mut res = HashMap::new();
+    for location in locations {
+        res.entry(location.name.clone())
+            .or_insert_with(Vec::new)
+            .push(location);
+    }
+    Ok(res
+        .into_iter()
+        .filter(|(_name, locations)| locations.len() >= min_count)
+        .collect())
+}
