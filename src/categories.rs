@@ -75,15 +75,20 @@ pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
     println!("aggregating outputs...");
     let mut out_map = HashMap::new();
     let mut completed = 0;
+    let mut num_empty = 0;
     while let Some(result) = result_rx.recv().await {
         let (k, v) = result?;
-        out_map.insert(k, v);
+        if v.len() == 0 {
+            num_empty += 1;
+        }
         completed += 1;
+        out_map.insert(k, v);
         println!(
-            "completed {}/{} ({:.5}%)",
+            "completed {}/{} ({:.5}%, {:.5}% not found)",
             completed,
             total_tasks,
-            100.0 * (completed as f64) / (total_tasks as f64)
+            100.0 * (completed as f64) / (total_tasks as f64),
+            100.0 * (num_empty as f64) / (completed as f64)
         );
     }
 
