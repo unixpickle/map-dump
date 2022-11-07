@@ -22,6 +22,7 @@ pub enum Error {
     RetryLimitExceeded,
     ParseJSON(serde_json::Error),
     ProcessJSON(String),
+    ProcessHTML(String),
 }
 
 impl Display for Error {
@@ -32,6 +33,7 @@ impl Display for Error {
             Self::RetryLimitExceeded => write!(f, "request retry limit exceeded"),
             Self::ParseJSON(e) => write!(f, "error parsing JSON: {}", e),
             Self::ProcessJSON(e) => write!(f, "error processing JSON structure: {}", e),
+            Self::ProcessHTML(e) => write!(f, "error processing html structure: {}", e),
         }
     }
 }
@@ -60,6 +62,24 @@ pub struct MapItem {
     pub chain_id: Option<String>,
     pub category_path: Option<String>,
     pub category_name: Option<String>,
+}
+
+impl MapItem {
+    fn from_json(parsed: &Value) -> Result<MapItem> {
+        Ok(MapItem {
+            id: read_object(parsed, "entity.id")?,
+            name: read_object(parsed, "entity.title")?,
+            location: GeoCoord(
+                read_object(parsed, "geometry.x")?,
+                read_object(parsed, "geometry.y")?,
+            ),
+            address: read_object(parsed, "entity.address").ok(),
+            phone: read_object(parsed, "entity.phone").ok(),
+            chain_id: read_object(parsed, "entity.chainId").ok(),
+            category_path: read_object(parsed, "entity.primaryCategoryPath").ok(),
+            category_name: read_object(parsed, "entity.primaryCategoryName").ok(),
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -226,19 +246,7 @@ impl Client {
         for obj in doc.select(&Selector::parse("a.listings-item").unwrap()) {
             if let Some(info_json) = obj.value().attr("data-entity") {
                 let parsed: Value = serde_json::from_str(info_json)?;
-                result.push(MapItem {
-                    id: read_object(&parsed, "entity.id")?,
-                    name: read_object(&parsed, "entity.title")?,
-                    location: GeoCoord(
-                        read_object(&parsed, "geometry.x")?,
-                        read_object(&parsed, "geometry.y")?,
-                    ),
-                    address: read_object(&parsed, "entity.address").ok(),
-                    phone: read_object(&parsed, "entity.phone").ok(),
-                    chain_id: read_object(&parsed, "entity.chainId").ok(),
-                    category_path: read_object(&parsed, "entity.primaryCategoryPath").ok(),
-                    category_name: read_object(&parsed, "entity.primaryCategoryName").ok(),
-                });
+                result.push(MapItem::from_json(&parsed)?);
             }
         }
         Ok(result)
@@ -255,7 +263,7 @@ impl Client {
         self.retry_loop(
             max_retries,
             (tile, category_id, query, chain_id),
-            move |cli, (tile, category_id, query, chain_id)| {
+            |cli, (tile, category_id, query, chain_id)| {
                 Box::pin(cli.points_of_interest_attempt(*tile, *category_id, *query, *chain_id))
             },
         )
@@ -307,6 +315,59 @@ impl Client {
                 })
                 .collect()
         }
+    }
+
+    pub async fn id_lookup(&mut self, ypid: &str, max_retries: u32) -> Result<Option<MapItem>> {
+        self.retry_loop(max_retries, ypid, |cli, ypid| {
+            Box::pin(cli.id_lookup_attempt(ypid))
+        })
+        .await
+    }
+
+    async fn id_lookup_attempt(&self, ypid: &str) -> Result<Option<MapItem>> {
+        let response = self
+            .client
+            .get("https://www.bing.com/maps/infoboxoverlaybfpr")
+            .version(Version::HTTP_11)
+            .query(&[
+                ("q", ""),
+                (
+                    "filters",
+                    &format!("local_ypid:\"{}\" direction_partner:\"maps\"", ypid),
+                ),
+            ])
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        // When overloaded, the server responds with messages of the form:
+        // Ref A: DC5..................73B Ref B: AMB......06 Ref C: 2022-09-20T00:20:31Z
+        if response.starts_with("Ref A:") {
+            return Err(Error::RateLimited);
+        }
+
+        let doc = Html::parse_fragment(&response);
+
+        // When the query has no results, an error is present in the response.
+        if doc
+            .select(&Selector::parse("div.mobileErrMsgFail").unwrap())
+            .count()
+            > 0
+        {
+            return Ok(None);
+        }
+
+        for obj in doc.select(&Selector::parse("div.overlay-taskpane").unwrap()) {
+            if let Some(info_json) = obj.value().attr("data-entity") {
+                let parsed: Value = serde_json::from_str(info_json)?;
+                return Ok(Some(MapItem::from_json(&parsed)?));
+            }
+        }
+        Err(Error::ProcessHTML(
+            "could not find data-entity in results".to_owned(),
+        ))
     }
 
     async fn retry_loop<'a, T: Debug, F, A>(&'a mut self, max_retries: u32, a: A, f: F) -> Result<T>
