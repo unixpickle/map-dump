@@ -1,6 +1,5 @@
 use crate::bing_maps::Client;
 use crate::bing_maps::PointOfInterest;
-use crate::geo_coord::GeoBounds;
 use crate::discover::read_discover_output;
 use crate::task_queue::TaskQueue;
 use clap::Parser;
@@ -24,9 +23,6 @@ pub struct CategoriesArgs {
     #[clap(short, long, value_parser, default_value_t = 0)]
     min_count: usize,
 
-    #[clap(short, long, value_parser, default_value_t = 0.00025260179852480549)]
-    radius: f64,
-
     #[clap(value_parser)]
     discover_out: String,
 
@@ -47,24 +43,16 @@ pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
     for i in 0..cli.parallelism {
         let task_queue_clone = task_queue.clone();
         let result_tx_clone = result_tx.clone();
-        let radius = cli.radius;
         let max_retries = cli.retries;
         let sample_locations = cli.sample_locations;
         let mut rng = rand::rngs::StdRng::seed_from_u64(i as u64);
         spawn(async move {
             let mut client = Client::new();
             while let Some((name, pois)) = task_queue_clone.pop().await {
-                let obj = get_categories(
-                    &mut client,
-                    &mut rng,
-                    pois,
-                    radius,
-                    sample_locations,
-                    max_retries,
-                )
-                .await;
-                let was_err = obj.is_err();
-                if result_tx_clone.send(obj.map(|x| (name, x))).await.is_err() || was_err {
+                let obj =
+                    get_categories(&mut client, &mut rng, pois, sample_locations, max_retries)
+                        .await;
+                if result_tx_clone.send(obj.map(|x| (name, x))).await.is_err() {
                     break;
                 }
             }
@@ -77,19 +65,26 @@ pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
     let mut completed = 0;
     let mut num_empty = 0;
     while let Some(result) = result_rx.recv().await {
-        let (k, v) = result?;
-        if v.len() == 0 {
-            num_empty += 1;
-        }
         completed += 1;
-        out_map.insert(k, v);
-        println!(
-            "completed {}/{} ({:.5}%, {:.5}% not found)",
-            completed,
-            total_tasks,
-            100.0 * (completed as f64) / (total_tasks as f64),
-            100.0 * (num_empty as f64) / (completed as f64)
-        );
+        match result {
+            Err(e) => {
+                println!("error fetching info: {}", e);
+                num_empty += 1;
+            }
+            Ok((k, v)) => {
+                if v.len() == 0 {
+                    num_empty += 1;
+                }
+                out_map.insert(k, v);
+                println!(
+                    "completed {}/{} ({:.5}%, {:.5}% not found)",
+                    completed,
+                    total_tasks,
+                    100.0 * (completed as f64) / (total_tasks as f64),
+                    100.0 * (num_empty as f64) / (completed as f64)
+                );
+            }
+        }
     }
 
     println!("writing to {}...", cli.output_file);
@@ -102,7 +97,7 @@ pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
 
 #[derive(Serialize)]
 struct Category {
-    name: String,
+    name: Option<String>,
     path: String,
 }
 
@@ -110,7 +105,6 @@ async fn get_categories(
     client: &mut Client,
     rng: &mut rand::rngs::StdRng,
     pois: Vec<PointOfInterest>,
-    radius: f64,
     max_count: usize,
     max_retries: u32,
 ) -> anyhow::Result<Vec<Category>> {
@@ -122,20 +116,12 @@ async fn get_categories(
         .into_iter()
         .choose_multiple(rng, max_count.min(max_count))
     {
-        let query_out = client
-            .map_search(
-                &poi.name,
-                &GeoBounds::around(poi.location, radius),
-                max_retries,
-            )
-            .await?;
-        for x in query_out {
-            if x.name == poi.name {
-                if let Some(path) = x.category_path {
-                    if let Some(name) = x.category_name {
-                        res.push(Category { name, path });
-                    }
-                }
+        if let Some(x) = client.id_lookup(&poi.id, max_retries).await? {
+            if let Some(path) = x.category_path {
+                res.push(Category {
+                    name: x.category_name,
+                    path,
+                });
             }
         }
     }

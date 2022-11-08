@@ -85,19 +85,6 @@ impl GeoBounds {
             GeoBounds(GeoCoord(x1, y1), GeoCoord(x2, y2)),
         ]
     }
-
-    pub fn around(point: GeoCoord, radius: f64) -> GeoBounds {
-        GeoBounds(
-            GeoCoord(
-                (point.0 - radius).clamp(-90.0, 90.0),
-                (point.1 - radius).clamp(-180.0, 180.0),
-            ),
-            GeoCoord(
-                (point.0 + radius).clamp(-90.0, 90.0),
-                (point.1 + radius).clamp(-180.0, 180.0),
-            ),
-        )
-    }
 }
 
 #[cfg(test)]
