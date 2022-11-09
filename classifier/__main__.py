@@ -8,7 +8,7 @@ import hashlib
 import json
 from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from sklearn.dummy import DummyClassifier
@@ -34,6 +34,12 @@ def main():
         help="use full categories, not just general names",
     )
     parser.add_argument(
+        "--truncate-categories",
+        default=None,
+        type=int,
+        help="when using full categories, truncate to this many components",
+    )
+    parser.add_argument(
         "--weight-num-locations",
         action="store_true",
         help="weight stores by number of locations",
@@ -55,7 +61,9 @@ def main():
     embs = Embeddings.load(args.embeddings)
 
     print("loading dataset...")
-    full_ds = Dataset.load(args.categories, args.full_categories)
+    full_ds = Dataset.load(
+        args.categories, args.full_categories, args.truncate_categories
+    )
     print(f"number of labels: {len(full_ds.cat_names)}")
     filtered_ds = full_ds.filter_to_embs(embs)
     print(
@@ -114,12 +122,21 @@ class Dataset:
     name_to_cat: Dict[str, List[int]]  # map store names to categories
 
     @classmethod
-    def load(cls, path: str, full_categories: bool) -> "Dataset":
+    def load(
+        cls, path: str, full_categories: bool, truncation: Optional[int]
+    ) -> "Dataset":
         store_to_cat_names = {}
         with open(path, "rb") as f:
             obj = json.load(f)
         for k, vs in obj.items():
-            cat_names = [v["path"] if full_categories else v["name"] for v in vs]
+            cat_names = [
+                (
+                    truncate_category_path(v["path"], truncation)
+                    if full_categories
+                    else v["name"]
+                )
+                for v in vs
+            ]
             if not len(cat_names):
                 continue
             store_to_cat_names[k] = cat_names
@@ -188,6 +205,13 @@ class Dataset:
                 labels.append(cat)
                 weights.append(extra_weight / len(cats))
         return np.stack(vectors, axis=0), np.array(labels), np.array(weights)
+
+
+def truncate_category_path(path: str, truncation: Optional[int]) -> str:
+    if truncation is None:
+        return path
+    else:
+        return ".".join(path.split(".")[:truncation])
 
 
 if __name__ == "__main__":
