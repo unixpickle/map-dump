@@ -5,6 +5,7 @@ mod clean;
 mod cooccurrence;
 mod discover;
 mod geo_coord;
+mod location_index;
 mod scrape;
 mod task_queue;
 mod website;
@@ -35,6 +36,10 @@ enum Cli {
         #[clap(flatten)]
         args: categories::CategoriesArgs,
     },
+    LocationIndex {
+        #[clap(flatten)]
+        args: location_index::LocationIndexArgs,
+    },
     Website {
         #[clap(flatten)]
         args: website::WebsiteArgs,
@@ -50,6 +55,7 @@ async fn main() -> ExitCode {
         Cli::Discover { args } => discover::discover(args).await,
         Cli::Scrape { args } => scrape::scrape(args).await,
         Cli::Categories { args } => categories::categories(args).await,
+        Cli::LocationIndex { args } => location_index::location_index(args).await,
         Cli::Website { args } => website::website(args).await,
     } {
         eprintln!("{}", e);
