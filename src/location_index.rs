@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Write},
+    path::Path,
 };
 use tokio::{
     sync::{
@@ -61,15 +62,15 @@ pub struct LocationIndex {
 }
 
 impl LocationIndex {
-    pub async fn new(path: &str) -> anyhow::Result<LocationIndex> {
-        let path_clone = path.to_owned();
+    pub async fn new<P: AsRef<Path>>(path: P) -> anyhow::Result<LocationIndex> {
+        let path_clone = path.as_ref().to_owned();
         spawn_blocking(move || -> anyhow::Result<LocationIndex> {
             LocationIndex::new_blocking(&path_clone)
         })
         .await?
     }
 
-    fn new_blocking(path: &str) -> anyhow::Result<LocationIndex> {
+    fn new_blocking(path: &Path) -> anyhow::Result<LocationIndex> {
         let file = File::open(path)?;
         let mut zf = ZipArchive::new(file)?;
         let mut f = zf.by_name("names.json")?;

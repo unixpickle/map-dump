@@ -1,4 +1,5 @@
 use crate::array_util::{dense_matrix_to_json, normalize_rows, vec_to_matrix};
+use crate::location_index::LocationIndex;
 use clap::Parser;
 use http::StatusCode;
 use hyper::service::{make_service_fn, service_fn};
@@ -25,21 +26,38 @@ pub struct WebsiteArgs {
     #[clap(short, long, value_parser, default_value_t = 8080)]
     port: u16,
 
+    #[clap(short, long, value_parser)]
+    location_index: String,
+
     #[clap(value_parser)]
     embedding_names_and_paths: Vec<String>,
+}
+
+#[derive(Clone)]
+struct ServerState {
+    emb: Arc<Embeddings>,
+    loc_index: Arc<LocationIndex>,
 }
 
 pub async fn website(cli: WebsiteArgs) -> anyhow::Result<()> {
     println!("reading embeddings...");
     let embeddings = Arc::new(Embeddings::read(&cli.embedding_names_and_paths).await?);
 
+    println!("reading location index...");
+    let loc_index = Arc::new(LocationIndex::new(&cli.location_index).await?);
+
+    let state = ServerState {
+        emb: embeddings,
+        loc_index,
+    };
+
     let addr = SocketAddr::from(([0, 0, 0, 0], cli.port));
 
     let make_service = make_service_fn(move |_conn| {
-        let emb_clone = embeddings.clone();
+        let state_clone = state.clone();
         async move {
             Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
-                handle_request(req, emb_clone.clone())
+                handle_request(req, state_clone.clone())
             }))
         }
     });
@@ -52,7 +70,7 @@ pub async fn website(cli: WebsiteArgs) -> anyhow::Result<()> {
 
 async fn handle_request(
     req: Request<Body>,
-    emb: Arc<Embeddings>,
+    state: ServerState,
 ) -> Result<Response<Body>, Infallible> {
     if req.uri().path() == "" {
         Ok(Response::builder()
@@ -64,7 +82,9 @@ async fn handle_request(
         Ok(Response::new(Body::from(*body)))
     } else if req.uri().path() == "/vecs.json" {
         let data = serde_json::to_string(
-            &emb.vecs
+            &state
+                .emb
+                .vecs
                 .iter()
                 .map(|(name, arr)| (name, dense_matrix_to_json(arr)))
                 .collect::<HashMap<_, _>>(),
@@ -76,7 +96,7 @@ async fn handle_request(
             .body(Body::from(data))
             .unwrap())
     } else if req.uri().path() == "/api" {
-        match handle_api_request(req, emb).await {
+        match handle_api_request(req, state).await {
             Ok(x) => Ok(x),
             Err(e) => Ok(json_response(
                 StatusCode::BAD_REQUEST,
@@ -95,7 +115,7 @@ async fn handle_request(
 
 async fn handle_api_request(
     req: Request<Body>,
-    emb: Arc<Embeddings>,
+    state: ServerState,
 ) -> anyhow::Result<Response<Body>> {
     let x = url::form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
         .collect::<HashMap<_, _>>();
@@ -108,14 +128,14 @@ async fn handle_api_request(
                 .get("count")
                 .ok_or_else(|| anyhow::Error::msg("missing 'count' parameter"))?
                 .parse()?;
-            let results = emb.knn(query, count)?;
+            let results = state.emb.knn(query, count)?;
             Ok(json_response(StatusCode::OK, &results))
         }
         Some("stores") => Ok(json_response(
             StatusCode::OK,
             &StoresResults {
-                names: emb.store_names.clone(),
-                counts: emb.store_counts.clone(),
+                names: state.emb.store_names.clone(),
+                counts: state.emb.store_counts.clone(),
             },
         )),
         Some(_) => Err(anyhow::Error::msg("unexpected value for 'f' parameter: {}")),
