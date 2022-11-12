@@ -1,4 +1,5 @@
 use crate::array_util::{dense_matrix_to_json, normalize_rows, vec_to_matrix};
+use crate::geo_coord::GeoCoord;
 use crate::location_index::LocationIndex;
 use clap::Parser;
 use http::StatusCode;
@@ -128,8 +129,15 @@ async fn handle_api_request(
                 .get("count")
                 .ok_or_else(|| anyhow::Error::msg("missing 'count' parameter"))?
                 .parse()?;
-            let results = state.emb.knn(query, count)?;
-            Ok(json_response(StatusCode::OK, &results))
+            if let Some(locations) = state.loc_index.lookup(query).await? {
+                let results = state.emb.knn(query, count, locations)?;
+                Ok(json_response(StatusCode::OK, &results))
+            } else {
+                Err(anyhow::Error::msg(format!(
+                    "no locations found for: {}",
+                    query
+                )))
+            }
         }
         Some("stores") => Ok(json_response(
             StatusCode::OK,
@@ -160,6 +168,7 @@ struct RawEmbeddings {
 struct KNNResults {
     query: String,
     store_count: u64,
+    locations: Vec<GeoCoord>,
     results: HashMap<String, Vec<String>>,
     dots: HashMap<String, Vec<f32>>,
 }
@@ -227,7 +236,7 @@ impl Embeddings {
         })
     }
 
-    fn knn(&self, query: &str, count: u32) -> anyhow::Result<KNNResults> {
+    fn knn(&self, query: &str, count: u32, locations: Vec<GeoCoord>) -> anyhow::Result<KNNResults> {
         if let Some(idx) = self.name_to_index.get(query) {
             let mut dots = HashMap::new();
             let mut neighbors = HashMap::new();
@@ -249,6 +258,7 @@ impl Embeddings {
             Ok(KNNResults {
                 query: query.to_owned(),
                 store_count: self.store_counts[*idx],
+                locations: locations,
                 results: neighbors,
                 dots: dots,
             })

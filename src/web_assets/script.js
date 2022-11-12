@@ -1,8 +1,10 @@
 const MAX_SUGGESTIONS = 50;
-
 const DOWN_KEY = 40;
 const UP_KEY = 38;
 const ENTER_KEY = 13;
+
+// State used by the table switcher
+let LATEST_EMBEDDING = '0';
 
 class App {
     constructor() {
@@ -304,6 +306,7 @@ async function createNeighborTable(name, onQuery) {
         throw results['error'];
     } else {
         const embNames = Object.keys(results.results);
+        embNames.sort();
         const tables = embNames.map((name) => {
             const table = document.createElement('table');
             const header = document.createElement('thead');
@@ -367,7 +370,8 @@ function tableSwitcher(names, tables) {
         option.textContent = x;
         select.appendChild(option);
     });
-    select.value = '0';
+    select.value = LATEST_EMBEDDING;
+    select.addEventListener('input', () => LATEST_EMBEDDING = select.value);
     switchControls.appendChild(select);
     element.appendChild(switchControls);
 
