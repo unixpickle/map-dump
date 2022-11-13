@@ -2,6 +2,8 @@ use crate::array_util::{dense_matrix_to_json, normalize_rows, vec_to_matrix};
 use crate::geo_coord::GeoCoord;
 use crate::location_index::LocationIndex;
 use clap::Parser;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use http::StatusCode;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
@@ -9,9 +11,11 @@ use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 use std::cmp::{Ord, Ordering};
 use std::convert::Infallible;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::{collections::HashMap, sync::Arc};
+use tokio::task::spawn_blocking;
 use tokio::{fs::File, io::AsyncReadExt};
 
 static ASSETS: [(&str, &str); 3] = [
@@ -21,6 +25,7 @@ static ASSETS: [(&str, &str); 3] = [
 ];
 
 static NOT_FOUND_PAGE: &str = include_str!("web_assets/404.html");
+static WORLD_MAP_JPEG: &[u8] = include_bytes!("web_assets/world_map.jpg");
 
 #[derive(Clone, Parser)]
 pub struct WebsiteArgs {
@@ -79,6 +84,16 @@ async fn handle_request(
             .status(http::StatusCode::TEMPORARY_REDIRECT)
             .body(Body::default())
             .unwrap())
+    } else if req.uri().path() == "/map" {
+        match handle_map_request(req, state).await {
+            Ok(x) => Ok(x),
+            Err(e) => Ok(json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &ResponseError {
+                    error: format!("{}", e),
+                },
+            )),
+        }
     } else if let Some(body) = HashMap::from(ASSETS).get(req.uri().path()) {
         Ok(Response::new(Body::from(*body)))
     } else if req.uri().path() == "/vecs.json" {
@@ -129,15 +144,8 @@ async fn handle_api_request(
                 .get("count")
                 .ok_or_else(|| anyhow::Error::msg("missing 'count' parameter"))?
                 .parse()?;
-            if let Some(locations) = state.loc_index.lookup(query).await? {
-                let results = state.emb.knn(query, count, locations)?;
-                Ok(json_response(StatusCode::OK, &results))
-            } else {
-                Err(anyhow::Error::msg(format!(
-                    "no locations found for: {}",
-                    query
-                )))
-            }
+            let results = state.emb.knn(query, count)?;
+            Ok(json_response(StatusCode::OK, &results))
         }
         Some("stores") => Ok(json_response(
             StatusCode::OK,
@@ -150,6 +158,87 @@ async fn handle_api_request(
         None => Err(anyhow::Error::msg(
             "missing 'f' parameter indicating which function to call",
         )),
+    }
+}
+
+async fn handle_map_request(
+    req: Request<Body>,
+    state: ServerState,
+) -> anyhow::Result<Response<Body>> {
+    let x = url::form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
+        .collect::<HashMap<_, _>>();
+    let query = x
+        .get("q")
+        .ok_or_else(|| anyhow::Error::msg("missing 'q' parameter"))?;
+    if let Some(locations) = state.loc_index.lookup(query).await? {
+        let accept_gzip = req
+            .headers()
+            .get("accept-encoding")
+            .map(|x| x.to_str().unwrap_or_default())
+            .unwrap_or_default()
+            .split(", ")
+            .map(|x| x.split(";").next().unwrap())
+            .any(|x| x == "gzip");
+        spawn_blocking(move || encode_map_response(locations, accept_gzip)).await?
+    } else {
+        Ok(Response::builder()
+            .status(http::StatusCode::NOT_FOUND)
+            .body(Body::from(NOT_FOUND_PAGE))
+            .unwrap())
+    }
+}
+
+fn encode_map_response(
+    locations: Vec<GeoCoord>,
+    accept_gzip: bool,
+) -> anyhow::Result<Response<Body>> {
+    let bg_img = base64::encode(WORLD_MAP_JPEG);
+
+    // Don't allow more than one location per pixel, to
+    // avoid really dense maps for popular locations.
+    let mut dedup_locations = HashMap::new();
+    for location in locations {
+        let x = 1024.0 * ((location.1 + 180.0) / 360.0);
+        let y = 512.0 * ((90.0 - location.0) / 180.0);
+        dedup_locations.insert((x.round() as i32, y.round() as i32), (x, y));
+    }
+
+    let locations_code: String = dedup_locations
+        .values()
+        .into_iter()
+        .map(|(x, y)| format!("\n    <use xlink:href=\"#dot\" x=\"{}\" y=\"{}\" />", x, y))
+        .collect();
+    let data_svg = format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<svg version=\"1.0\"
+ xmlns=\"http://www.w3.org/2000/svg\"
+ xmlns:xlink=\"http://www.w3.org/1999/xlink\"
+ viewBox=\"0 0 1024 512\">
+<defs>
+    <g id=\"dot\">
+        <circle r=\"5\" fill=\"rgba(255, 0, 0, 0.3)\" />
+        <circle r=\"2\" fill=\"rgba(255, 0, 0, 1.0)\" />
+    </g>
+</defs>
+<image width=\"100%\" height=\"100%\"
+       xlink:href=\"data:image/jpeg;base64,{}\" />{}
+</svg>",
+        bg_img, locations_code,
+    );
+    if accept_gzip {
+        let mut e = GzEncoder::new(Vec::new(), Compression::default());
+        e.write_all(data_svg.as_bytes()).unwrap();
+        let compressed_bytes = e.finish().unwrap();
+        Ok(Response::builder()
+            .header("content-type", "image/svg+xml")
+            .header("content-encoding", "gzip")
+            .body(Body::from(compressed_bytes))
+            .unwrap())
+    } else {
+        Ok(Response::builder()
+            .header("content-type", "image/svg+xml")
+            .body(Body::from(data_svg))
+            .unwrap())
     }
 }
 
@@ -168,7 +257,6 @@ struct RawEmbeddings {
 struct KNNResults {
     query: String,
     store_count: u64,
-    locations: Vec<GeoCoord>,
     results: HashMap<String, Vec<String>>,
     dots: HashMap<String, Vec<f32>>,
 }
@@ -236,7 +324,7 @@ impl Embeddings {
         })
     }
 
-    fn knn(&self, query: &str, count: u32, locations: Vec<GeoCoord>) -> anyhow::Result<KNNResults> {
+    fn knn(&self, query: &str, count: u32) -> anyhow::Result<KNNResults> {
         if let Some(idx) = self.name_to_index.get(query) {
             let mut dots = HashMap::new();
             let mut neighbors = HashMap::new();
@@ -258,7 +346,6 @@ impl Embeddings {
             Ok(KNNResults {
                 query: query.to_owned(),
                 store_count: self.store_counts[*idx],
-                locations: locations,
                 results: neighbors,
                 dots: dots,
             })
