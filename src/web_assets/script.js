@@ -3,8 +3,9 @@ const DOWN_KEY = 40;
 const UP_KEY = 38;
 const ENTER_KEY = 13;
 
-// State used by the table switcher
+// State persisted across reloads of the search results.
 let LATEST_EMBEDDING = '0';
+let MAP_VIEWER_OPEN = false;
 
 class App {
     constructor() {
@@ -344,12 +345,10 @@ async function createNeighborTable(name, onQuery) {
             return table;
         });
         const switcher = tableSwitcher(embNames, tables);
-        const countLabel = document.createElement('label');
-        countLabel.className = 'count-label';
-        countLabel.textContent = 'Found ' + results['store_count'] + ' locations named "' + results['query'] + '".'
+        const mapViewer = createMapViewer(name, results);
         const container = document.createElement('div');
         container.className = 'results-container';
-        container.appendChild(countLabel);
+        container.appendChild(mapViewer);
         container.appendChild(switcher);
         return container;
     }
@@ -388,6 +387,26 @@ function tableSwitcher(names, tables) {
     showSelected();
 
     return element;
+}
+
+function createMapViewer(name, results) {
+    const mapViewer = document.createElement('details');
+    mapViewer.className = 'map-viewer';
+
+    const countLabel = document.createElement('summary');
+    countLabel.className = 'count-label';
+    countLabel.textContent = 'Found ' + results['store_count'] + ' locations named "' + results['query'] + '".'
+    mapViewer.appendChild(countLabel);
+
+    const mapImage = document.createElement('img');
+    mapImage.className = 'map-image';
+    mapImage.src = '/map?q=' + encodeURIComponent(name);
+    mapViewer.appendChild(mapImage);
+
+    mapViewer.open = MAP_VIEWER_OPEN;
+    mapViewer.addEventListener('toggle', () => MAP_VIEWER_OPEN = mapViewer.open);
+
+    return mapViewer;
 }
 
 window.addEventListener('load', () => window.app = new App());

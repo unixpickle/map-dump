@@ -134,11 +134,16 @@ body {
     padding: 10px;
 }
 
-#results .count-label {
+#results .map-viewer {
     display: block;
     text-align: center;
     margin-bottom: 10px;
     font-style: oblique;
+}
+
+#results .map-image {
+    margin-top: 5px;
+    width: 80%;
 }
 
 #results .table-switcher {
