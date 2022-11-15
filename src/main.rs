@@ -6,6 +6,7 @@ mod cooccurrence;
 mod discover;
 mod geo_coord;
 mod location_index;
+mod npz_file;
 mod scrape;
 mod task_queue;
 mod website;
