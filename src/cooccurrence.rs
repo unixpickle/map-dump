@@ -111,7 +111,7 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
                     let cos_dist = src_loc.location.cos_geo_dist(&dst_loc.location);
                     if cos_dist > cos_radius {
                         let weight = dropoff_mode.weight(cos_dist, radius);
-                        bin_row[dst_loc.store_index] = weight;
+                        bin_row[dst_loc.store_index] = weight.max(bin_row[dst_loc.store_index]);
                         if count_pairs && src > dst {
                             pair_count
                                 .add_entry((src_loc.store_index, dst_loc.store_index), weight);
