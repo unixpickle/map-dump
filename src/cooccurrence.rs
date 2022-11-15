@@ -2,6 +2,7 @@ use crate::array_util::SparseMatrix;
 use crate::bing_maps::MapItem;
 use crate::bing_maps::PointOfInterest;
 use crate::geo_coord::{GeoCoord, VecGeoCoord};
+use clap::arg_enum;
 use serde_json::{Map, Value};
 use std::f64::consts::PI;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,6 +17,8 @@ use tokio::{
     task::spawn_blocking,
 };
 
+const MAX_THREAD_ALLOCATION: usize = 131072;
+
 #[derive(Clone, Parser)]
 pub struct CoocurrenceArgs {
     #[clap(value_parser)]
@@ -27,6 +30,12 @@ pub struct CoocurrenceArgs {
     // Default radius is roughly 1 mile (in radians).
     #[clap(short, long, value_parser, default_value_t = 0.00025260179852480549)]
     radius: f64,
+
+    #[clap(short, long, value_parser, default_value_t = DropoffMode::Constant)]
+    dropoff_mode: DropoffMode,
+
+    #[clap(short, long)]
+    count_pairs: bool,
 
     #[clap(short, long, value_parser, default_value_t = 8)]
     workers: i32,
@@ -74,6 +83,8 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         let flat_locations_clone = flat_locations.clone();
         let num_stores = store_locations.len();
         let radius = cli.radius;
+        let dropoff_mode = cli.dropoff_mode.clone();
+        let count_pairs = cli.count_pairs;
         let cur_index_clone = cur_index.clone();
         spawn_blocking(move || {
             let cos_radius = radius.cos();
@@ -97,16 +108,27 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
                 let min_lat = src_loc.latitude - radius;
                 let max_lat = src_loc.latitude + radius;
                 for (dst, dst_loc) in bisect_locations(&flat_locations_clone, min_lat, max_lat) {
-                    if src_loc.location.cos_geo_dist(&dst_loc.location) > cos_radius {
-                        bin_row[dst_loc.store_index] = 1.0;
-                        if src > dst {
-                            pair_count.add_entry((src_loc.store_index, dst_loc.store_index), 1.0);
-                            pair_count.add_entry((dst_loc.store_index, src_loc.store_index), 1.0);
+                    let cos_dist = src_loc.location.cos_geo_dist(&dst_loc.location);
+                    if cos_dist > cos_radius {
+                        let weight = dropoff_mode.weight(cos_dist, radius);
+                        bin_row[dst_loc.store_index] = weight;
+                        if count_pairs && src > dst {
+                            pair_count
+                                .add_entry((src_loc.store_index, dst_loc.store_index), weight);
+                            pair_count
+                                .add_entry((dst_loc.store_index, src_loc.store_index), weight);
                         }
                     }
                 }
                 for (i, x) in bin_row.iter().enumerate() {
                     binary_count.add_entry((src_loc.store_index, i), *x);
+                }
+                // Prevent thread-local buffers from becoming too large,
+                // since then memory usage will scale with thread count.
+                if binary_count.allocated() + pair_count.allocated() > MAX_THREAD_ALLOCATION {
+                    results_tx_clone
+                        .blocking_send((pair_count.swap_zeros(), binary_count.swap_zeros()))
+                        .unwrap();
                 }
             }
             results_tx_clone
@@ -125,26 +147,26 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     }
 
     println!("serializing resulting matrix to {}...", cli.output_path);
-    let result_dict = Value::Object(Map::from_iter([
+    let store_counts = sorted_names
+        .iter()
+        .map(|x| store_locations[x].len() as u64)
+        .collect::<Vec<_>>();
+    let mut output_map = Map::from_iter([
         ("radius".to_owned(), Value::from(cli.radius)),
         ("names".to_owned(), Value::from(sorted_names.clone())),
-        (
-            "store_counts".to_owned(),
-            sorted_names
-                .iter()
-                .map(|x| store_locations[x].len())
-                .collect::<Vec<_>>()
-                .into(),
-        ),
-        (
-            "pair_counts".to_owned(),
-            pair_counts.into_json(cli.sparse_out),
-        ),
+        ("store_counts".to_owned(), store_counts.into()),
         (
             "binary_counts".to_owned(),
             binary_counts.into_json(cli.sparse_out),
         ),
-    ]));
+    ]);
+    if cli.count_pairs {
+        output_map.insert(
+            "pair_counts".to_owned(),
+            pair_counts.into_json(cli.sparse_out),
+        );
+    }
+    let result_dict = Value::Object(output_map);
     let serialized = serde_json::to_string(&result_dict)?;
     let mut writer = File::create(cli.output_path).await?;
     writer.write_all(serialized.as_bytes()).await?;
@@ -221,6 +243,23 @@ async fn read_scraped_locations(src: &PathBuf) -> anyhow::Result<Vec<GeoCoord>> 
         .map(|x| serde_json::from_str::<MapItem>(&x).map(|x| x.location))
         .collect::<Result<Vec<_>, _>>();
     Ok(result?)
+}
+
+arg_enum! {
+    #[derive(Clone)]
+    enum DropoffMode {
+        Constant,
+        Linear,
+    }
+}
+
+impl DropoffMode {
+    fn weight(&self, cos_dist: f64, radius: f64) -> f64 {
+        match self {
+            DropoffMode::Constant => 1.0,
+            DropoffMode::Linear => 1.0 - (cos_dist.clamp(-1.0, 1.0).acos() / radius),
+        }
+    }
 }
 
 #[derive(PartialEq, Clone, Debug)]
