@@ -1,12 +1,14 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, mem::swap};
 
 use ndarray::{Array2, Axis, LinalgScalar};
 
 use num_traits::{real::Real, Zero};
 use serde_json::{Map, Value};
 
-pub trait Numeric: LinalgScalar + Real + Into<Value> {}
-impl<T> Numeric for T where T: LinalgScalar + Real + Into<Value> {}
+use crate::npz_file::{NpzWriter, NumpyArrayElement};
+
+pub trait Numeric: LinalgScalar + Real + Into<Value> + Send + NumpyArrayElement {}
+impl<T> Numeric for T where T: LinalgScalar + Real + Into<Value> + Send + NumpyArrayElement {}
 
 pub fn dense_matrix_to_json<T: Numeric>(matrix: &Array2<T>) -> Value {
     matrix
@@ -49,10 +51,20 @@ pub struct SparseMatrix<T: Numeric> {
 
 impl<T: Numeric> SparseMatrix<T> {
     pub fn zeros(size: (usize, usize)) -> Self {
-        return SparseMatrix {
+        SparseMatrix {
             coord_to_data: HashMap::new(),
             size,
-        };
+        }
+    }
+
+    pub fn swap_zeros(&mut self) -> SparseMatrix<T> {
+        let mut res = SparseMatrix::zeros(self.size);
+        swap(&mut self.coord_to_data, &mut res.coord_to_data);
+        res
+    }
+
+    pub fn allocated(&self) -> usize {
+        self.coord_to_data.len()
     }
 
     pub fn add_entry(&mut self, idx: (usize, usize), value: T) {
@@ -67,6 +79,32 @@ impl<T: Numeric> SparseMatrix<T> {
             self.into()
         } else {
             dense_matrix_to_json(&(&self).into())
+        }
+    }
+
+    pub async fn write_to_npz(
+        self,
+        w: &mut NpzWriter,
+        name: &str,
+        sparse: bool,
+    ) -> std::io::Result<()> {
+        if sparse {
+            let cap = self.coord_to_data.len();
+            let mut rows = Vec::with_capacity(cap);
+            let mut cols = Vec::with_capacity(cap);
+            let mut values = Vec::with_capacity(cap);
+            for ((row, col), value) in self.coord_to_data.into_iter() {
+                if !value.is_zero() {
+                    rows.push(row as u32);
+                    cols.push(col as u32);
+                    values.push(value);
+                }
+            }
+            w.write(&format!("{}_rows", name), rows).await?;
+            w.write(&format!("{}_cols", name), cols).await?;
+            w.write(&format!("{}_values", name), values).await
+        } else {
+            w.write(name, Array2::from(&self)).await
         }
     }
 }
