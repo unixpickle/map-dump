@@ -25,6 +25,15 @@ class SparseMatrix:
         res[self.indices[0], self.indices[1]] = self.values
         return res
 
+    @classmethod
+    def from_dense(cls, obj: torch.Tensor) -> "SparseMatrix":
+        sparse_tensor = obj.to_sparse().coalesce()
+        return SparseMatrix(
+            shape=sparse_tensor.shape,
+            indices=sparse_tensor.indices().clone(),
+            values=sparse_tensor.values().clone(),
+        )
+
     def __mul__(self, other: Union[float, "SparseMatrix"]) -> "SparseMatrix":
         return self._run_op(other, lambda x, y: x * y)
 

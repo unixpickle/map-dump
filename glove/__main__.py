@@ -9,9 +9,11 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from numpy.lib.npyio import NpzFile
 
 from .sparse import SparseMatmul, SparseMatrix
 
@@ -110,17 +112,30 @@ class Cooc:
 
     @classmethod
     def load(cls, path: str, device: torch.device) -> "Cooc":
-        with open(path, "rb") as f:
-            all_data = json.load(f)
-        return cls(
-            store_names=all_data["names"],
-            store_counts=all_data["store_counts"],
-            cooccurrences=_remove_diagonal(
-                _matrix_from_json(
-                    len(all_data["names"]), all_data["binary_counts"], device
-                )
-            ),
-        )
+        if path.endswith(".json"):
+            with open(path, "rb") as f:
+                all_data = json.load(f)
+            return cls(
+                store_names=all_data["names"],
+                store_counts=all_data["store_counts"],
+                cooccurrences=_remove_diagonal(
+                    _matrix_from_json(
+                        len(all_data["names"]), all_data["binary_counts"], device
+                    ).compact_index_dtype()
+                ),
+            )
+        else:
+            np_obj = np.load(path)
+            names = np_obj["names"].tolist()
+            return cls(
+                store_names=names,
+                store_counts=np_obj["store_counts"].tolist(),
+                cooccurrences=_remove_diagonal(
+                    _matrix_from_npz(
+                        len(names), "binary_counts", np_obj, device
+                    ).compact_index_dtype()
+                ),
+            )
 
     def log_cooc(self) -> SparseMatrix:
         return SparseMatrix(
@@ -139,22 +154,37 @@ class Cooc:
 
 
 def _matrix_from_json(
-    size: int, obj: Union[Dict[str, Any], List[List[float]]], device=torch.device
+    size: int, obj: Union[Dict[str, Any], List[List[float]]], device: torch.device
 ) -> SparseMatrix:
     if isinstance(obj, list):
-        sparse_tensor = (
-            torch.tensor(obj, dtype=torch.float32, device=device).to_sparse().coalesce()
-        )
-        return SparseMatrix(
-            shape=sparse_tensor.shape,
-            indices=sparse_tensor.indices().clone(),
-            values=sparse_tensor.values().clone(),
+        return SparseMatrix.from_dense(
+            torch.tensor(obj, dtype=torch.float32, device=device)
         )
     else:
         return SparseMatrix(
             shape=(size, size),
             indices=torch.tensor(obj["indices"], dtype=torch.long, device=device),
             values=torch.tensor(obj["values"], dtype=torch.float32, device=device),
+        )
+
+
+def _matrix_from_npz(
+    size: int, key: str, np_obj: NpzFile, device: torch.device
+) -> SparseMatrix:
+    if key in list(np_obj.keys()):
+        dense = np_obj[key]
+        return SparseMatrix.from_dense(
+            torch.from_numpy(dense).to(dtype=torch.float32, device=device)
+        )
+    else:
+        rows = np_obj[f"{key}_rows"]
+        cols = np_obj[f"{key}_cols"]
+        indices = np.stack([rows, cols], axis=0).astype(np.int32)
+        values = np_obj[f"{key}_values"]
+        return SparseMatrix(
+            shape=(size, size),
+            indices=torch.from_numpy(indices).to(dtype=torch.long, device=device),
+            values=torch.from_numpy(values).to(dtype=torch.float32, device=device),
         )
 
 
