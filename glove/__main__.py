@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.optim as optim
 from numpy.lib.npyio import NpzFile
 
+from .loss import SquaredError
 from .sparse import SparseMatmul, SparseMatrix
 
 
@@ -60,19 +61,17 @@ def main():
     opt = (optim.Adam if args.adam else optim.Adagrad)(
         params, lr=args.lr, weight_decay=args.weight_decay
     )
-
     print("optimizing...")
     for i in range(args.iters):
         if args.dense:
             biases = bias_lr_boost * (vecs_bias[:, None] + contexts_bias)
             pred = (vecs @ contexts.T) + biases
+            loss = SquaredError.apply(pred, targets, weights)
         else:
-            biases = bias_lr_boost * sparse_bias_sum(
-                cooc.cooccurrences, vecs_bias, contexts_bias
+            pred = sparse_mm.mm(vecs, contexts.T).add_bias_vecs(
+                bias_lr_boost * vecs_bias, bias_lr_boost * contexts_bias
             )
-            pred = sparse_mm.mm(vecs, contexts.T) + biases
-        losses = weights * ((pred - targets) ** 2)
-        loss = losses.sum()
+            loss = pred.squared_error(targets, weights)
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -91,17 +90,6 @@ def main():
             ),
             f,
         )
-
-
-def sparse_bias_sum(
-    target_mat: SparseMatrix, row_bias: torch.Tensor, col_bias: torch.Tensor
-) -> SparseMatrix:
-    indices = target_mat.indices
-    return SparseMatrix(
-        shape=target_mat.shape,
-        indices=indices,
-        values=row_bias[indices[0]] + col_bias[indices[1]],
-    )
 
 
 @dataclass
