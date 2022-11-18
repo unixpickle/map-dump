@@ -2,6 +2,7 @@ use crate::array_util::SparseMatrix;
 use crate::bing_maps::MapItem;
 use crate::bing_maps::PointOfInterest;
 use crate::geo_coord::{GeoCoord, VecGeoCoord};
+use crate::npz_file::NpzWriter;
 use clap::arg_enum;
 use serde_json::{Map, Value};
 use std::f64::consts::PI;
@@ -151,26 +152,42 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
         .iter()
         .map(|x| store_locations[x].len() as u64)
         .collect::<Vec<_>>();
-    let mut output_map = Map::from_iter([
-        ("radius".to_owned(), Value::from(cli.radius)),
-        ("names".to_owned(), Value::from(sorted_names.clone())),
-        ("store_counts".to_owned(), store_counts.into()),
-        (
-            "binary_counts".to_owned(),
-            binary_counts.into_json(cli.sparse_out),
-        ),
-    ]);
-    if cli.count_pairs {
-        output_map.insert(
-            "pair_counts".to_owned(),
-            pair_counts.into_json(cli.sparse_out),
-        );
+    if cli.output_path.ends_with(".json") {
+        let mut output_map = Map::from_iter([
+            ("radius".to_owned(), Value::from(cli.radius)),
+            ("names".to_owned(), Value::from(sorted_names.clone())),
+            ("store_counts".to_owned(), store_counts.into()),
+            (
+                "binary_counts".to_owned(),
+                binary_counts.into_json(cli.sparse_out),
+            ),
+        ]);
+        if cli.count_pairs {
+            output_map.insert(
+                "pair_counts".to_owned(),
+                pair_counts.into_json(cli.sparse_out),
+            );
+        }
+        let result_dict = Value::Object(output_map);
+        let serialized = serde_json::to_string(&result_dict)?;
+        let mut writer = File::create(cli.output_path).await?;
+        writer.write_all(serialized.as_bytes()).await?;
+        writer.flush().await?;
+    } else {
+        let mut writer = NpzWriter::new(&cli.output_path).await?;
+        writer.write("radius", cli.radius).await?;
+        writer.write("names", sorted_names.clone()).await?;
+        writer.write("store_counts", store_counts).await?;
+        binary_counts
+            .write_to_npz(&mut writer, "binary_counts", cli.sparse_out)
+            .await?;
+        if cli.count_pairs {
+            pair_counts
+                .write_to_npz(&mut writer, "pair_counts", cli.sparse_out)
+                .await?;
+        }
+        writer.close().await?;
     }
-    let result_dict = Value::Object(output_map);
-    let serialized = serde_json::to_string(&result_dict)?;
-    let mut writer = File::create(cli.output_path).await?;
-    writer.write_all(serialized.as_bytes()).await?;
-    writer.flush().await?;
 
     Ok(())
 }
@@ -250,6 +267,10 @@ arg_enum! {
     enum DropoffMode {
         Constant,
         Linear,
+        Quadratic,
+        InvSquareP50,
+        InvSquareP25,
+        InvSquareP10,
     }
 }
 
@@ -258,6 +279,18 @@ impl DropoffMode {
         match self {
             DropoffMode::Constant => 1.0,
             DropoffMode::Linear => 1.0 - (cos_dist.clamp(-1.0, 1.0).acos() / radius),
+            DropoffMode::Quadratic => 1.0 - (cos_dist.clamp(-1.0, 1.0).acos() / radius).powf(2.0),
+            DropoffMode::InvSquareP50 | DropoffMode::InvSquareP25 | DropoffMode::InvSquareP10 => {
+                let theta = cos_dist.clamp(-1.0, 1.0).acos();
+                let percentile = match self {
+                    DropoffMode::InvSquareP50 => 0.5,
+                    DropoffMode::InvSquareP25 => 0.25,
+                    DropoffMode::InvSquareP10 => 0.1,
+                    _ => unreachable!(),
+                };
+                let min_radius = radius * percentile;
+                (min_radius / theta.max(min_radius)).powf(2.0)
+            }
         }
     }
 }
