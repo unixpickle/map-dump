@@ -4,6 +4,7 @@ use crate::location_index::LocationIndex;
 use clap::Parser;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use futures_util::StreamExt;
 use http::StatusCode;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
@@ -11,6 +12,7 @@ use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 use std::cmp::{Ord, Ordering};
 use std::convert::Infallible;
+use std::fmt::Display;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::ops::Deref;
@@ -63,7 +65,11 @@ pub async fn website(cli: WebsiteArgs) -> anyhow::Result<()> {
         let state_clone = state.clone();
         async move {
             Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
-                handle_request(req, state_clone.clone())
+                let state_clone_clone = state_clone.clone();
+                async move {
+                    let raw_resp = handle_request(&req, state_clone_clone).await.unwrap();
+                    maybe_compress_response(&req, raw_resp).await
+                }
             }))
         }
     });
@@ -75,7 +81,7 @@ pub async fn website(cli: WebsiteArgs) -> anyhow::Result<()> {
 }
 
 async fn handle_request(
-    req: Request<Body>,
+    req: &Request<Body>,
     state: ServerState,
 ) -> Result<Response<Body>, Infallible> {
     if req.uri().path() == "" {
@@ -130,7 +136,7 @@ async fn handle_request(
 }
 
 async fn handle_api_request(
-    req: Request<Body>,
+    req: &Request<Body>,
     state: ServerState,
 ) -> anyhow::Result<Response<Body>> {
     let x = url::form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
@@ -162,7 +168,7 @@ async fn handle_api_request(
 }
 
 async fn handle_map_request(
-    req: Request<Body>,
+    req: &Request<Body>,
     state: ServerState,
 ) -> anyhow::Result<Response<Body>> {
     let x = url::form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
@@ -240,6 +246,55 @@ fn encode_map_response(
             .body(Body::from(data_svg))
             .unwrap())
     }
+}
+
+async fn maybe_compress_response(
+    req: &Request<Body>,
+    mut resp: Response<Body>,
+) -> Result<Response<Body>, Infallible> {
+    let accept_gzip = req
+        .headers()
+        .get("accept-encoding")
+        .map(|x| x.to_str().unwrap_or_default())
+        .unwrap_or_default()
+        .split(", ")
+        .map(|x| x.split(";").next().unwrap())
+        .any(|x| x == "gzip");
+    if !accept_gzip {
+        Ok(resp)
+    } else {
+        let pieces = resp
+            .body_mut()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<hyper::Result<Vec<hyper::body::Bytes>>>();
+        Ok(match pieces {
+            Err(e) => internal_err_response("compressing body", e),
+            Ok(data) => spawn_blocking(move || -> Response<Body> {
+                let mut e = GzEncoder::new(Vec::new(), Compression::default());
+                for part in data {
+                    e.write_all(&part).unwrap();
+                }
+                let compressed_bytes = e.finish().unwrap();
+                let mut builder = Response::builder().header("content-encoding", "gzip");
+                for (k, v) in resp.headers().iter() {
+                    builder = builder.header(k, v);
+                }
+                builder.body(Body::from(compressed_bytes)).unwrap()
+            })
+            .await
+            .unwrap_or_else(|e| internal_err_response("compressing body", e)),
+        })
+    }
+}
+
+fn internal_err_response<E: Display>(ctx: &str, err: E) -> Response<Body> {
+    eprintln!("internal error: {}: {}", ctx, err);
+    Response::builder()
+        .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+        .body(Body::from(format!("{}: {}", ctx, err)))
+        .unwrap()
 }
 
 #[derive(Debug, Deserialize)]
