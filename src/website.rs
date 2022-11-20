@@ -90,6 +90,10 @@ async fn handle_request(
             .status(http::StatusCode::TEMPORARY_REDIRECT)
             .body(Body::default())
             .unwrap())
+    } else if req.uri().path() == "/robots.txt" {
+        Ok(Response::new(Body::from(
+            "User-agent: *\r\nDisallow: /\r\n",
+        )))
     } else if req.uri().path() == "/map" {
         match handle_map_request(req, state).await {
             Ok(x) => Ok(x),
