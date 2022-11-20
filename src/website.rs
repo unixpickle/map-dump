@@ -181,7 +181,7 @@ async fn handle_map_request(
         .get("q")
         .ok_or_else(|| anyhow::Error::msg("missing 'q' parameter"))?;
     if let Some(locations) = state.loc_index.lookup(query).await? {
-        spawn_blocking(move || encode_map_response(locations, accept_gzip)).await?
+        spawn_blocking(move || encode_map_response(locations)).await?
     } else {
         Ok(Response::builder()
             .status(http::StatusCode::NOT_FOUND)
