@@ -177,14 +177,6 @@ async fn handle_map_request(
         .get("q")
         .ok_or_else(|| anyhow::Error::msg("missing 'q' parameter"))?;
     if let Some(locations) = state.loc_index.lookup(query).await? {
-        let accept_gzip = req
-            .headers()
-            .get("accept-encoding")
-            .map(|x| x.to_str().unwrap_or_default())
-            .unwrap_or_default()
-            .split(", ")
-            .map(|x| x.split(";").next().unwrap())
-            .any(|x| x == "gzip");
         spawn_blocking(move || encode_map_response(locations, accept_gzip)).await?
     } else {
         Ok(Response::builder()
@@ -194,10 +186,7 @@ async fn handle_map_request(
     }
 }
 
-fn encode_map_response(
-    locations: Vec<GeoCoord>,
-    accept_gzip: bool,
-) -> anyhow::Result<Response<Body>> {
+fn encode_map_response(locations: Vec<GeoCoord>) -> anyhow::Result<Response<Body>> {
     let bg_img = base64::encode(WORLD_MAP_JPEG);
 
     // Don't allow more than one location per pixel, to
@@ -231,21 +220,10 @@ fn encode_map_response(
 </svg>",
         bg_img, locations_code,
     );
-    if accept_gzip {
-        let mut e = GzEncoder::new(Vec::new(), Compression::default());
-        e.write_all(data_svg.as_bytes()).unwrap();
-        let compressed_bytes = e.finish().unwrap();
-        Ok(Response::builder()
-            .header("content-type", "image/svg+xml")
-            .header("content-encoding", "gzip")
-            .body(Body::from(compressed_bytes))
-            .unwrap())
-    } else {
-        Ok(Response::builder()
-            .header("content-type", "image/svg+xml")
-            .body(Body::from(data_svg))
-            .unwrap())
-    }
+    Ok(Response::builder()
+        .header("content-type", "image/svg+xml")
+        .body(Body::from(data_svg))
+        .unwrap())
 }
 
 async fn maybe_compress_response(
