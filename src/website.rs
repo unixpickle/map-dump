@@ -20,10 +20,23 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::task::spawn_blocking;
 use tokio::{fs::File, io::AsyncReadExt};
 
-static ASSETS: [(&str, &str); 3] = [
-    ("/", include_str!("web_assets/index.html")),
-    ("/script.js", include_str!("web_assets/script.js")),
-    ("/style.css", include_str!("web_assets/style.css")),
+static ASSETS: [(&str, (&str, &str)); 4] = [
+    ("/", ("text/html", include_str!("web_assets/index.html"))),
+    (
+        "/script.js",
+        (
+            "application/javascript",
+            include_str!("web_assets/script.js"),
+        ),
+    ),
+    (
+        "/style.css",
+        ("text/css", include_str!("web_assets/style.css")),
+    ),
+    (
+        "/x.svg",
+        ("image/svg+xml", include_str!("web_assets/x.svg")),
+    ),
 ];
 
 static NOT_FOUND_PAGE: &str = include_str!("web_assets/404.html");
@@ -104,8 +117,11 @@ async fn handle_request(
                 },
             )),
         }
-    } else if let Some(body) = HashMap::from(ASSETS).get(req.uri().path()) {
-        Ok(Response::new(Body::from(*body)))
+    } else if let Some((content_type, body)) = HashMap::from(ASSETS).get(req.uri().path()) {
+        Ok(Response::builder()
+            .header("content-type", *content_type)
+            .body(Body::from(*body))
+            .unwrap())
     } else if req.uri().path() == "/vecs.json" {
         let data = serde_json::to_string(
             &state
