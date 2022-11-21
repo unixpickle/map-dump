@@ -178,7 +178,12 @@ body {
     margin-right: 5px;
 }
 
+#results .table-switcher .download-link {
+    margin-left: 7px;
+}
+
 #results a {
+    text-decoration: none;
     color: #54a8e4;
 }
 

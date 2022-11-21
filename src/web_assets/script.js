@@ -382,6 +382,11 @@ function tableSwitcher(names, tables) {
     select.value = LATEST_EMBEDDING;
     select.addEventListener('input', () => LATEST_EMBEDDING = select.value);
     switchControls.appendChild(select);
+    const downloadLink = document.createElement('a');
+    downloadLink.href = '/vecs.json';
+    downloadLink.className = 'download-link';
+    downloadLink.textContent = '(Download All)';
+    switchControls.appendChild(downloadLink);
     element.appendChild(switchControls);
 
     let curTable = null;
