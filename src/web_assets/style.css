@@ -46,6 +46,7 @@ body {
 #search-box {
     box-sizing: border-box;
     border: 1px solid #d5d5d5;
+    padding: 0 50px 0 10px;
     width: 100%;
     color: #555;
 }
@@ -66,6 +67,24 @@ body {
     color: #999;
 }
 
+#search-clear-button {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    background-image: url('x.svg');
+    background-size: 100%;
+
+    /* Get rid of default button styling */
+    border: none;
+    padding: none;
+    font-size: 0;
+    color: transparent;
+    background-color: transparent;
+}
+
 #suggestions {
     display: none;
     width: 100%;
@@ -77,6 +96,7 @@ body {
 
 .suggestion {
     box-sizing: border-box;
+    padding: 0 10px;
     width: 100%;
     border-bottom: 1px solid #f9f9f9;
     color: #999;
@@ -89,7 +109,6 @@ body {
 
 #search-box,
 .suggestion {
-    padding: 0 10px;
     font-size: 30px;
     line-height: 40px;
 }

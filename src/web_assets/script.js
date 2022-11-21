@@ -5,7 +5,7 @@ const ENTER_KEY = 13;
 
 // State persisted across reloads of the search results.
 let LATEST_EMBEDDING = '0';
-let MAP_VIEWER_OPEN = false;
+let MAP_VIEWER_OPEN = true;
 
 class App {
     constructor() {
@@ -81,6 +81,7 @@ class SearchBox {
     constructor() {
         this.element = document.getElementById('search-container');
         this.input = document.getElementById('search-box');
+        this.clearButton = document.getElementById('search-clear-button');
         this.suggestionContainer = document.getElementById('suggestions');
         this.suggestionElements = [];
         this.curSuggestion = 0;
@@ -92,6 +93,15 @@ class SearchBox {
         this.input.addEventListener('blur', () => {
             // Delay allows clicking on a suggestion.
             setTimeout(() => this._updateFocus(), 500);
+        });
+
+        this.clearButton.addEventListener('click', () => {
+            this.input.value = '';
+            this._querySuggestions();
+
+            // Clicking the button could have made focus leave the input,
+            // which would hide the suggestion box (and keyboard on mobile).
+            this.input.focus();
         });
 
         this.suggestor = new LocationSuggestor();
