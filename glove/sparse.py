@@ -20,6 +20,11 @@ class SparseMatrix:
     def sum(self) -> torch.Tensor:
         return self.values.sum()
 
+    def detach(self) -> "SparseMatrix":
+        return SparseMatrix(
+            shape=self.shape, indices=self.indices, values=self.values.detach()
+        )
+
     def to_dense(self) -> torch.Tensor:
         res = torch.zeros(
             self.shape, dtype=self.values.dtype, device=self.values.device
@@ -37,7 +42,13 @@ class SparseMatrix:
         )
 
     def compact_index_dtype(self) -> "SparseMatrix":
-        if self.indices.shape[1] < (1 << 31):
+        if self.indices.max().item() < (1 << 15):
+            return SparseMatrix(
+                shape=self.shape,
+                indices=self.indices.to(torch.int16),
+                values=self.values,
+            )
+        elif self.indices.max().item() < (1 << 31):
             return SparseMatrix(
                 shape=self.shape,
                 indices=self.indices.to(torch.int32),
@@ -45,15 +56,6 @@ class SparseMatrix:
             )
         else:
             return self
-
-    def add_bias_vecs(
-        self, row_bias: torch.Tensor, col_bias: torch.Tensor
-    ) -> "SparseMatrix":
-        return SparseMatrix(
-            shape=self.shape,
-            indices=self.indices,
-            values=AddBiasVecs.apply(self.values, self.indices, row_bias, col_bias),
-        )
 
     def squared_error(
         self, targets: "SparseMatrix", weights: "SparseMatrix"
@@ -95,38 +97,6 @@ class SparseMatrix:
             )
 
 
-class AddBiasVecs(torch.autograd.Function):
-    @staticmethod
-    def forward(
-        ctx,
-        base: torch.Tensor,
-        indices: torch.Tensor,
-        row_bias: torch.Tensor,
-        col_bias: torch.Tensor,
-    ) -> torch.Tensor:
-        ctx.save_for_backward(indices)
-        ctx.bias_shapes = (len(row_bias), len(col_bias))
-        with torch.no_grad():
-            out = base.clone()
-            out.add_(row_bias[indices[0].long()])
-            out.add_(col_bias[indices[1].long()])
-            return out
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        (indices,) = ctx.saved_tensors
-        num_rows, num_cols = ctx.bias_shapes
-        row_grad = torch.zeros(
-            num_rows, dtype=grad_output.dtype, device=grad_output.device
-        )
-        row_grad.scatter_add_(0, indices[0].long(), grad_output)
-        col_grad = torch.zeros(
-            num_cols, dtype=grad_output.dtype, device=grad_output.device
-        )
-        col_grad.scatter_add_(0, indices[1].long(), grad_output)
-        return grad_output, None, row_grad, col_grad
-
-
 def _check_compatible(m1: SparseMatrix, m2: SparseMatrix):
     assert m1.shape == m2.shape
     assert m1.indices.shape == m2.indices.shape
@@ -135,7 +105,8 @@ def _check_compatible(m1: SparseMatrix, m2: SparseMatrix):
 
 class SparseMatmul:
     """
-    Multiply two dense matrices into a sparse output matrix.
+    Multiply two dense matrices and add the sparsified broadcast sum of a row
+    and a column vector into a sparse output matrix.
     """
 
     def __init__(self, output_pattern: SparseMatrix, block_size: int = 2048):
@@ -172,45 +143,86 @@ class SparseMatmul:
         )
         self._output_indices = all_indices
 
-    def mm(self, m1: torch.Tensor, m2: torch.Tensor) -> SparseMatrix:
+    def weighted_squared_error(
+        self,
+        m1: torch.Tensor,
+        m2: torch.Tensor,
+        row_bias: torch.Tensor,
+        col_bias: torch.Tensor,
+        targets: "SparseMatrix",
+        weights: "SparseMatrix",
+    ) -> torch.Tensor:
+        """
+        Compute sum(weights*||sparsify(m1 @ m2 + row_bias[:, None] + col_bias - targets)||^2)
+
+        Does not compute gradients for targets or weights.
+        """
+        assert not targets.values.requires_grad
+        assert not weights.values.requires_grad
         assert m1.shape[0] == self._out_size
         assert m2.shape[1] == self._out_size
         assert m1.shape[1] == m2.shape[0]
+        assert row_bias.shape == (self._out_size,)
+        assert col_bias.shape == (self._out_size,)
+        _check_compatible(targets, weights)
+        assert targets.shape == (self._out_size,) * 2
+        assert (
+            targets.indices is self._output_indices
+            or (targets.indices == self._output_indices).all().item()
+        )
 
-        class SparseMatmulFunc(torch.autograd.Function):
+        class SparseSquaredErrorFunc(torch.autograd.Function):
             @staticmethod
-            def forward(ctx, m1: torch.Tensor, m2: torch.Tensor) -> torch.Tensor:
-                ctx.save_for_backward(m1, m2)
+            def forward(
+                ctx,
+                m1: torch.Tensor,
+                m2: torch.Tensor,
+                row_bias: torch.Tensor,
+                col_bias: torch.Tensor,
+                targets: torch.Tensor,
+                weights: torch.Tensor,
+            ) -> torch.Tensor:
+                ctx.save_for_backward(m1, m2, row_bias, col_bias, targets, weights)
                 with torch.no_grad():
-                    out_indices = self._output_perm
-                    out = torch.zeros(
-                        len(out_indices), device=m1.device, dtype=m1.dtype
-                    )
-                    for (row, col), take_indices in zip(
-                        self._iterate_blocks(), self._block_take_indices
-                    ):
-                        sub_rows = m1[row : row + self._block_size]
-                        sub_cols = m2[:, col : col + self._block_size]
-                        product = (sub_rows @ sub_cols).view(-1)[take_indices.long()]
-                        n = len(product)
-                        out[out_indices[:n].long()] = product
-                        out_indices = out_indices[n:]
+                    out = torch.zeros((), device=m1.device, dtype=torch.float64)
+                    for (
+                        _row,
+                        _col,
+                        _sub_rows,
+                        _sub_cols,
+                        product,
+                        _take_indices,
+                        target_indices,
+                    ) in self._iterate_products(m1, m2, row_bias, col_bias):
+                        sub_targets = targets[target_indices].to(product)
+                        sub_weights = weights[target_indices].to(product)
+                        out += (sub_weights * ((product - sub_targets) ** 2)).sum(
+                            dtype=out.dtype
+                        )
                     return out
 
             @staticmethod
             def backward(ctx, grad_output):
-                m1, m2 = ctx.saved_tensors
+                m1, m2, row_bias, col_bias, targets, weights = ctx.saved_tensors
                 m1_grad = torch.zeros_like(m1)
                 m2_grad = torch.zeros_like(m2)
-                in_indices = self._output_perm
-                for (row, col), take_indices in zip(
-                    self._iterate_blocks(), self._block_take_indices
-                ):
-                    sub_rows = m1[row : row + self._block_size]
-                    sub_cols = m2[:, col : col + self._block_size]
-                    n = len(take_indices)
-                    sub_grad = grad_output[in_indices[:n].long()]
-                    in_indices = in_indices[n:]
+                row_bias_grad = torch.zeros(len(m1), dtype=m1.dtype, device=m1.device)
+                col_bias_grad = torch.zeros_like(row_bias)
+                for (
+                    row,
+                    col,
+                    sub_rows,
+                    sub_cols,
+                    product,
+                    take_indices,
+                    target_indices,
+                ) in self._iterate_products(m1, m2, row_bias, col_bias):
+                    sub_grad = (
+                        2
+                        * grad_output.to(product)
+                        * weights[target_indices].to(product)
+                        * (product - targets[target_indices].to(product))
+                    )
 
                     dense_sub_grad = torch.zeros(
                         sub_rows.shape[0],
@@ -224,18 +236,50 @@ class SparseMatmul:
                     sub_cols_grad = sub_rows.t() @ dense_sub_grad
                     m1_grad[row : row + self._block_size] += sub_rows_grad
                     m2_grad[:, col : col + self._block_size] += sub_cols_grad
-                return m1_grad, m2_grad
 
-        return SparseMatrix(
-            shape=(self._out_size,) * 2,
-            indices=self._output_indices,
-            values=SparseMatmulFunc.apply(m1, m2),
+                    row_bias_grad[row : row + self._block_size] += dense_sub_grad.sum(1)
+                    col_bias_grad[col : col + self._block_size] += dense_sub_grad.sum(0)
+                return m1_grad, m2_grad, row_bias_grad, col_bias_grad, None, None
+
+        return SparseSquaredErrorFunc.apply(
+            m1, m2, row_bias, col_bias, targets.values, weights.values
         )
 
     def _iterate_blocks(self) -> Tuple[int, int]:
         for row in range(0, self._out_size, self._block_size):
             for col in range(0, self._out_size, self._block_size):
                 yield row, col
+
+    def _iterate_products(
+        self,
+        m1: torch.Tensor,
+        m2: torch.Tensor,
+        row_bias: torch.Tensor,
+        col_bias: torch.Tensor,
+    ) -> Tuple[
+        int, int, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+    ]:
+        with torch.no_grad():
+            out = torch.zeros((), device=m1.device, dtype=torch.float64)
+            out_indices = self._output_perm
+            for (row, col), take_indices in zip(
+                self._iterate_blocks(), self._block_take_indices
+            ):
+                take_indices = take_indices.long()
+
+                n = len(take_indices)
+                target_indices = out_indices[:n].long()
+                out_indices = out_indices[n:]
+
+                sub_rows = m1[row : row + self._block_size]
+                sub_cols = m2[:, col : col + self._block_size]
+                out_bias = (
+                    row_bias[row : row + self._block_size, None]
+                    + col_bias[col : col + self._block_size]
+                )
+                product = ((sub_rows @ sub_cols) + out_bias).view(-1)[take_indices]
+
+                yield row, col, sub_rows, sub_cols, product, take_indices, target_indices
 
 
 def _output_permutation(

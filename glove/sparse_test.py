@@ -12,74 +12,39 @@ def test_sparse_ops():
     assert (actual - expected).abs().max().item() < 1e-5
 
 
-def test_sparse_matmul():
-    size = 125
-    block_size = 17
-
-    mat1 = torch.randn(size, 8)
-    mat2 = torch.randn(8, size)
-    expected_out = random_sparsify(mat1 @ mat2)
-    actual_out = SparseMatmul(expected_out, block_size=block_size).mm(mat1, mat2)
-
-    assert (expected_out.to_dense() - actual_out.to_dense()).abs().max().item() < 1e-5
-
-
-def test_sparse_matmul_grad():
+def test_sparse_squared_error():
     size = 125
     block_size = 17
 
     mat1 = nn.Parameter(torch.randn(size, 8).double())
     mat2 = nn.Parameter(torch.randn(8, size).double())
-    expected_out = random_sparsify(mat1 @ mat2)
-    weight = (expected_out.values**2).detach()
-
-    expected_m1_grad, expected_m2_grad = torch.autograd.grad(
-        expected_out.values, (mat1, mat2), weight
-    )
-
-    actual_out = SparseMatmul(expected_out, block_size=block_size).mm(mat1, mat2)
-    actual_m1_grad, actual_m2_grad = torch.autograd.grad(
-        actual_out.values, (mat1, mat2), weight
-    )
-
-    assert (expected_out.to_dense() - actual_out.to_dense()).abs().max().item() < 1e-5
-    assert (expected_m1_grad - actual_m1_grad).abs().max().item() < 1e-5
-    assert (expected_m2_grad - actual_m2_grad).abs().max().item() < 1e-5
-
-
-def test_sparse_matmul_add_bias():
-    size = 125
-    block_size = 17
-
-    mat1 = nn.Parameter(torch.randn(size, 8).double())
-    mat2 = nn.Parameter(torch.randn(8, size).double())
-    row_bias = nn.Parameter(torch.randn(size))
-    col_bias = nn.Parameter(torch.randn(size))
+    row_bias = nn.Parameter(torch.randn(size).double())
+    col_bias = nn.Parameter(torch.randn(size).double())
     expected_out = random_sparsify(mat1 @ mat2 + row_bias[:, None] + col_bias)
-    weight = (expected_out.values**2).detach()
 
+    # Create some arbitrary targets and loss weights.
+    targets = (expected_out.detach() * (1.0 / 3.0)) ** 3.0
+    weights = expected_out.detach() ** 2
+
+    expected_loss = (weights * (expected_out - targets) ** 2).values.sum()
     (
         expected_m1_grad,
         expected_m2_grad,
         expected_row_bias_grad,
         expected_col_bias_grad,
-    ) = torch.autograd.grad(
-        expected_out.values, (mat1, mat2, row_bias, col_bias), weight
-    )
+    ) = torch.autograd.grad(expected_loss, (mat1, mat2, row_bias, col_bias))
 
-    actual_out = (
-        SparseMatmul(expected_out, block_size=block_size)
-        .mm(mat1, mat2)
-        .add_bias_vecs(row_bias, col_bias)
-    )
+    actual_loss = SparseMatmul(
+        expected_out, block_size=block_size
+    ).weighted_squared_error(mat1, mat2, row_bias, col_bias, targets, weights)
     (
         actual_m1_grad,
         actual_m2_grad,
         actual_row_bias_grad,
         actual_col_bias_grad,
-    ) = torch.autograd.grad(actual_out.values, (mat1, mat2, row_bias, col_bias), weight)
+    ) = torch.autograd.grad(actual_loss, (mat1, mat2, row_bias, col_bias))
 
-    assert (expected_out.to_dense() - actual_out.to_dense()).abs().max().item() < 1e-5
+    assert (expected_loss - actual_loss).abs().max().item() < 1e-5
     assert (expected_m1_grad - actual_m1_grad).abs().max().item() < 1e-5
     assert (expected_m2_grad - actual_m2_grad).abs().max().item() < 1e-5
     assert (expected_row_bias_grad - actual_row_bias_grad).abs().max().item() < 1e-5
