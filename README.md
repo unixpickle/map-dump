@@ -57,13 +57,15 @@ Next, we can run a very high-resolution scrape:
 
 ```bash
 ./target/release/map_dump cooccurrence \
-    --min-count 75 \
-    --radius .00050520359704961098 \      # specified in radians
-    --dropoff-mode Linear \
+    --min-count 65 \
+    --radius .00101040719409922196 \ # 4 miles in radians
+    --dropoff-mode InvSquareP10 \
     --sparse-out \
     discovered_fine.json \
-    cooccurrence_min75.npz
+    cooccurrence_min65.npz
 ```
+
+**Download**: [cooccurrence_min65.npz](https://data.aqnichol.com/map-dump/cooccurrence_min65.npz)
 
 ## Computing GloVe embeddings
 
@@ -73,9 +75,11 @@ python3 -u -m glove \
     --lr 0.01 \
     --weight_decay 0.01 \
     --adam \
-    cooccurrence_min75.npz \
-    embeddings_min75.json
+    cooccurrence_min65.npz \
+    embeddings_min65.json
 ```
+
+**Download**: [embeddings_min65.json.gz](https://data.aqnichol.com/map-dump/embeddings_min65.json.gz)
 
 ## Creating a location index
 
@@ -103,7 +107,7 @@ python3 -u -m glove \
 
 ```bash
 python3 -u -m classifier \
-    --embeddings embeddings_min75.json \
+    --embeddings embeddings_min65.json \
     --categories categories_min75.json \
     --full \
     --classifier linear \
@@ -117,7 +121,7 @@ To see a constant-class baseline, run with `--classifier dummy`.
 ```
 ./target/release/map_dump website \
     --location-index location_index.zip \
-    Embs embeddings_min75.json
+    Embs embeddings_min65.json
 ```
 
 The website allows you to pass multiple sets of embeddings, like `name1 path1.json name2 path2.json`, but they must have the exact same store names (in the same order). This will be the default behavior if all of the embeddings are based on the same co-occurrence matrix, or if all of the co-occurrence matrices are based on the same scrape and have the same `--min-count` argument.
