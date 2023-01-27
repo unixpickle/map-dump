@@ -18,6 +18,7 @@ ndarray = { version = "0.15.6" }
 num-traits = { version = "0.2.15" }
 rand = { version="0.8.5", features=["std_rng"] }
 reqwest = { version="0.11.11", default-features = false, features = ["rustls-tls-native-roots"] }
+rusqlite = { version="0.28.0", features = ["bundled"] }
 scraper = { version="0.13.0" }
 serde = { version="1.0", features = ["derive"] }
 serde_json = { version="1.0" }

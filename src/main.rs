@@ -4,6 +4,7 @@ mod categories;
 mod clean;
 mod cooccurrence;
 mod discover;
+mod discover_all;
 mod geo_coord;
 mod location_index;
 mod npz_file;
@@ -24,6 +25,10 @@ enum Cli {
     Discover {
         #[clap(flatten)]
         args: discover::DiscoverArgs,
+    },
+    DiscoverAll {
+        #[clap(flatten)]
+        args: discover_all::DiscoverAllArgs,
     },
     Clean {
         #[clap(flatten)]
@@ -54,6 +59,7 @@ async fn main() -> ExitCode {
         Cli::Clean { args } => clean::clean(args).await,
         Cli::Cooccurrence { args } => cooccurrence::cooccurrence(args).await,
         Cli::Discover { args } => discover::discover(args).await,
+        Cli::DiscoverAll { args } => discover_all::discover_all(args).await,
         Cli::Scrape { args } => scrape::scrape(args).await,
         Cli::Categories { args } => categories::categories(args).await,
         Cli::LocationIndex { args } => location_index::location_index(args).await,

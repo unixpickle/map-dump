@@ -82,7 +82,7 @@ impl MapItem {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Tile {
     pub level_of_detail: u8,
     pub x: u32,

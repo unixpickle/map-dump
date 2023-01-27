@@ -151,7 +151,7 @@ async fn read_filtered_names(
     }
 }
 
-async fn fetch_results(
+pub async fn fetch_results(
     client: &mut Client,
     categories: &Vec<String>,
     tile: Tile,
