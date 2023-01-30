@@ -1,7 +1,7 @@
 use crate::array_util::SparseMatrix;
 use crate::bing_maps::MapItem;
 use crate::bing_maps::PointOfInterest;
-use crate::geo_coord::{GeoCoord, VecGeoCoord};
+use crate::geo_coord::{GeoCoord, GlobeBounds, VecGeoCoord};
 use crate::npz_file::NpzWriter;
 use clap::arg_enum;
 use serde_json::{Map, Value};
@@ -28,6 +28,9 @@ pub struct CoocurrenceArgs {
     #[clap(value_parser)]
     output_path: String,
 
+    #[clap(short, long, value_parser, default_value_t = GlobeBounds::Globe)]
+    bounds: GlobeBounds,
+
     // Default radius is roughly 1 mile (in radians).
     #[clap(short, long, value_parser, default_value_t = 0.00025260179852480549)]
     radius: f64,
@@ -51,7 +54,7 @@ pub struct CoocurrenceArgs {
 pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     println!("loading locations from: {}", cli.input_dir);
     let input_dir = PathBuf::from(cli.input_dir);
-    let store_locations = read_all_store_locations(&input_dir, cli.min_count).await?;
+    let store_locations = read_all_store_locations(&input_dir, cli.bounds, cli.min_count).await?;
     println!("loaded {} locations", store_locations.len());
 
     // Get a canonical ordering of stores for the matrix.
@@ -194,6 +197,7 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
 
 async fn read_all_store_locations(
     src: &PathBuf,
+    bounds: GlobeBounds,
     min_count: usize,
 ) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
     let all_results = if metadata(src).await?.is_dir() {
@@ -203,15 +207,24 @@ async fn read_all_store_locations(
     };
     Ok(all_results
         .into_iter()
+        .map(|(name, locations)| {
+            (
+                name,
+                locations
+                    .into_iter()
+                    .filter(|x| bounds.contains(x))
+                    .collect::<Vec<GeoCoord>>(),
+            )
+        })
         .filter(|(_, locations)| locations.len() >= min_count)
         .collect())
 }
 
 async fn read_all_store_locations_discover(
-    input_dir: &PathBuf,
+    input_path: &PathBuf,
 ) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
     let mut contents = Vec::new();
-    File::open(input_dir)
+    File::open(input_path)
         .await?
         .read_to_end(&mut contents)
         .await?;

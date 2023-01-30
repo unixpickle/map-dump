@@ -1,3 +1,4 @@
+use clap::arg_enum;
 use std::f64::consts::PI;
 
 use serde::{Deserialize, Serialize};
@@ -84,6 +85,43 @@ impl GeoBounds {
             GeoBounds(GeoCoord(x0, y1), GeoCoord(x1, y2)),
             GeoBounds(GeoCoord(x1, y1), GeoCoord(x2, y2)),
         ]
+    }
+
+    pub fn contains(&self, coord: &GeoCoord) -> bool {
+        coord.0 >= self.0 .0 && coord.1 >= self.0 .1 && coord.0 <= self.1 .0 && coord.1 <= self.1 .1
+    }
+}
+
+arg_enum! {
+    #[derive(Clone)]
+    pub enum GlobeBounds {
+        Globe,
+        USA,
+    }
+}
+
+impl GlobeBounds {
+    pub fn contains(&self, coord: &GeoCoord) -> bool {
+        for rect in self.rects() {
+            if rect.contains(&coord) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn rects(&self) -> &'static [GeoBounds] {
+        match self {
+            GlobeBounds::Globe => &[GeoBounds(GeoCoord(0.0, -180.0), GeoCoord(90.0, 180.0))],
+            GlobeBounds::USA => &[
+                // main body: https://gist.github.com/graydon/11198540
+                GeoBounds(GeoCoord(24.9493, -125.0011), GeoCoord(49.5904, -66.9326)),
+                // Alaska (approximated via a map)
+                GeoBounds(GeoCoord(54.1402, -168.798), GeoCoord(71.958, -140.4972)),
+                // Hawaii (approximated via a map)
+                GeoBounds(GeoCoord(18.41, -161.35), GeoCoord(22.995, -153.45)),
+            ],
+        }
     }
 }
 
