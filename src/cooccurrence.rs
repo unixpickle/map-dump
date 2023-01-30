@@ -6,6 +6,7 @@ use crate::npz_file::NpzWriter;
 use clap::arg_enum;
 use serde_json::{Map, Value};
 use std::f64::consts::PI;
+use std::io::ErrorKind;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs::metadata;
@@ -203,7 +204,7 @@ async fn read_all_store_locations(
     let all_results = if metadata(src).await?.is_dir() {
         read_all_store_locations_scrape(src).await?
     } else {
-        read_all_store_locations_discover(src).await?
+        read_all_store_locations_discover(src, min_count).await?
     };
     Ok(all_results
         .into_iter()
@@ -222,6 +223,47 @@ async fn read_all_store_locations(
 
 async fn read_all_store_locations_discover(
     input_path: &PathBuf,
+    min_count: usize,
+) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
+    if is_sqlite3_file(input_path).await? {
+        read_all_store_locations_discover_sqlite3(input_path, min_count).await
+    } else {
+        read_all_store_locations_discover_json(input_path).await
+    }
+}
+
+async fn read_all_store_locations_discover_sqlite3(
+    input_path: &PathBuf,
+    min_count: usize,
+) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
+    let path_clone = input_path.clone();
+    spawn_blocking(move || {
+        let db = rusqlite::Connection::open(path_clone)?;
+        let mut res = HashMap::<String, Vec<GeoCoord>>::new();
+        let mut query = db.prepare(
+            "
+                SELECT (name, lat, lon) FROM poi ORDER BY name WHERE name IN (
+                    SELECT name FROM poi WHERE COUNT(*) > ?1 GROUP BY name
+                )
+            ",
+        )?;
+        let results = query.query_map((min_count,), |row| {
+            let name = row.get::<_, String>("name")?;
+            let lat = row.get::<_, f64>("lat")?;
+            let lon = row.get::<_, f64>("lon")?;
+            Ok((name, lat, lon))
+        })?;
+        for item in results {
+            let (name, lat, lon) = item?;
+            res.entry(name).or_default().push(GeoCoord(lat, lon));
+        }
+        Ok(res)
+    })
+    .await?
+}
+
+async fn read_all_store_locations_discover_json(
+    input_path: &PathBuf,
 ) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
     let mut contents = Vec::new();
     File::open(input_path)
@@ -237,6 +279,24 @@ async fn read_all_store_locations_discover(
             .push(poi.location);
     }
     Ok(results)
+}
+
+async fn is_sqlite3_file(input_path: &PathBuf) -> std::io::Result<bool> {
+    let mut contents: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    match File::open(input_path)
+        .await?
+        .read_exact(&mut contents)
+        .await
+    {
+        Ok(_) => Ok(&contents == b"SQLite format 3\0"),
+        Err(e) => {
+            if e.kind() == ErrorKind::UnexpectedEof {
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 async fn read_all_store_locations_scrape(
