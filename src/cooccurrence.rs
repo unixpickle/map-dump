@@ -1,12 +1,14 @@
 use crate::array_util::SparseMatrix;
 use crate::bing_maps::MapItem;
-use crate::bing_maps::PointOfInterest;
+use crate::discover::read_all_store_locations_discover_json;
+use crate::discover_all::read_all_store_locations_discover_sqlite3;
 use crate::geo_coord::{GeoCoord, GlobeBounds, VecGeoCoord};
 use crate::npz_file::NpzWriter;
 use clap::arg_enum;
 use serde_json::{Map, Value};
 use std::f64::consts::PI;
 use std::io::ErrorKind;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::fs::metadata;
@@ -196,15 +198,15 @@ pub async fn cooccurrence(cli: CoocurrenceArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn read_all_store_locations(
-    src: &PathBuf,
+pub async fn read_all_store_locations<P: AsRef<Path>>(
+    src: P,
     bounds: GlobeBounds,
     min_count: usize,
 ) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
-    let all_results = if metadata(src).await?.is_dir() {
-        read_all_store_locations_scrape(src).await?
+    let all_results = if metadata(&src).await?.is_dir() {
+        read_all_store_locations_scrape(&src.as_ref().to_owned()).await?
     } else {
-        read_all_store_locations_discover(src, min_count).await?
+        read_all_store_locations_discover(&src.as_ref().to_owned(), min_count).await?
     };
     Ok(all_results
         .into_iter()
@@ -226,59 +228,14 @@ async fn read_all_store_locations_discover(
     min_count: usize,
 ) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
     if is_sqlite3_file(input_path).await? {
-        read_all_store_locations_discover_sqlite3(input_path, min_count).await
+        read_all_store_locations_discover_sqlite3(input_path.clone(), min_count).await
     } else {
-        read_all_store_locations_discover_json(input_path).await
+        let pois = read_all_store_locations_discover_json(input_path, min_count).await?;
+        Ok(pois
+            .into_iter()
+            .map(|(name, pois)| (name, pois.into_iter().map(|poi| poi.location).collect()))
+            .collect())
     }
-}
-
-async fn read_all_store_locations_discover_sqlite3(
-    input_path: &PathBuf,
-    min_count: usize,
-) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
-    let path_clone = input_path.clone();
-    spawn_blocking(move || {
-        let db = rusqlite::Connection::open(path_clone)?;
-        let mut res = HashMap::<String, Vec<GeoCoord>>::new();
-        let mut query = db.prepare(
-            "
-                SELECT name, lat, lon FROM poi WHERE name IN (
-                    SELECT name FROM poi GROUP BY name HAVING COUNT(*) >= ?1
-                )
-            ",
-        )?;
-        let results = query.query_map((min_count,), |row| {
-            let name = row.get::<_, String>("name")?;
-            let lat = row.get::<_, f64>("lat")?;
-            let lon = row.get::<_, f64>("lon")?;
-            Ok((name, lat, lon))
-        })?;
-        for item in results {
-            let (name, lat, lon) = item?;
-            res.entry(name).or_default().push(GeoCoord(lat, lon));
-        }
-        Ok(res)
-    })
-    .await?
-}
-
-async fn read_all_store_locations_discover_json(
-    input_path: &PathBuf,
-) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
-    let mut contents = Vec::new();
-    File::open(input_path)
-        .await?
-        .read_to_end(&mut contents)
-        .await?;
-    let pois: Vec<PointOfInterest> = serde_json::from_slice(&contents)?;
-    let mut results = HashMap::new();
-    for poi in pois.into_iter() {
-        results
-            .entry(poi.name.clone())
-            .or_insert_with(Vec::new)
-            .push(poi.location);
-    }
-    Ok(results)
 }
 
 async fn is_sqlite3_file(input_path: &PathBuf) -> std::io::Result<bool> {

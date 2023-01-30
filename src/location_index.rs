@@ -1,4 +1,7 @@
-use crate::{discover::read_discover_output, geo_coord::GeoCoord};
+use crate::{
+    cooccurrence::read_all_store_locations,
+    geo_coord::{GeoCoord, GlobeBounds},
+};
 use clap::Parser;
 use std::{
     collections::HashMap,
@@ -17,6 +20,12 @@ use zip::{write::FileOptions, ZipArchive, ZipWriter};
 
 #[derive(Clone, Parser)]
 pub struct LocationIndexArgs {
+    #[clap(short, long, value_parser, default_value_t = 1)]
+    min_count: usize,
+
+    #[clap(short, long, value_parser, default_value_t = GlobeBounds::Globe)]
+    bounds: GlobeBounds,
+
     #[clap(value_parser)]
     discover_out: String,
 
@@ -26,7 +35,7 @@ pub struct LocationIndexArgs {
 
 pub async fn location_index(cli: LocationIndexArgs) -> anyhow::Result<()> {
     println!("loading locations...");
-    let locations = read_discover_output(&cli.discover_out, 1).await?;
+    let locations = read_all_store_locations(&cli.discover_out, cli.bounds, cli.min_count).await?;
     let keys = locations.keys().map(|x| x.clone()).collect::<Vec<_>>();
 
     println!("writing data to file...");
@@ -39,10 +48,7 @@ pub async fn location_index(cli: LocationIndexArgs) -> anyhow::Result<()> {
         zw.write_all(&name_json)?;
 
         for (i, k) in keys.into_iter().enumerate() {
-            let coords = locations[&k]
-                .iter()
-                .map(|x| x.location.clone())
-                .collect::<Vec<_>>();
+            let coords = locations[&k].iter().map(|x| x.clone()).collect::<Vec<_>>();
             let encoded = serde_json::to_vec(&coords)?;
             zw.start_file(format!("{}.json", i), FileOptions::default())?;
             zw.write_all(&encoded)?;

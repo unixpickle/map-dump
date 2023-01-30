@@ -1,6 +1,8 @@
 use crate::bing_maps::Client;
 use crate::bing_maps::PointOfInterest;
-use crate::discover::read_discover_output;
+use crate::cooccurrence::read_all_store_locations;
+use crate::geo_coord::GeoCoord;
+use crate::geo_coord::GlobeBounds;
 use crate::task_queue::TaskQueue;
 use clap::Parser;
 use rand::seq::IteratorRandom;
@@ -23,6 +25,9 @@ pub struct CategoriesArgs {
     #[clap(short, long, value_parser, default_value_t = 0)]
     min_count: usize,
 
+    #[clap(short, long, value_parser, default_value_t = GlobeBounds::Globe)]
+    bounds: GlobeBounds,
+
     #[clap(value_parser)]
     discover_out: String,
 
@@ -32,9 +37,9 @@ pub struct CategoriesArgs {
 
 pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
     println!("loading locations...");
-    let locations = read_discover_output(&cli.discover_out, cli.min_count).await?;
+    let locations = read_all_store_locations(&cli.discover_out, cli.bounds, cli.min_count).await?;
     let total_tasks = locations.len();
-    let task_queue: TaskQueue<(String, Vec<PointOfInterest>)> = locations.into();
+    let task_queue: TaskQueue<(String, Vec<GeoCoord>)> = locations.into();
     println!("total locations: {}", total_tasks);
 
     println!("creating workers...");
@@ -48,7 +53,15 @@ pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
         let mut rng = rand::rngs::StdRng::seed_from_u64(i as u64);
         spawn(async move {
             let mut client = Client::new();
-            while let Some((name, pois)) = task_queue_clone.pop().await {
+            while let Some((name, coords)) = task_queue_clone.pop().await {
+                let pois = coords
+                    .into_iter()
+                    .map(|coord| PointOfInterest {
+                        id: "".to_owned(),
+                        name: name.clone(),
+                        location: coord,
+                    })
+                    .collect();
                 let obj =
                     get_categories(&mut client, &mut rng, pois, sample_locations, max_retries)
                         .await;

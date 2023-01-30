@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::bing_maps::{self, Client, PointOfInterest, Tile};
 use crate::task_queue::TaskQueue;
@@ -182,21 +183,24 @@ pub async fn fetch_results(
     Ok(res)
 }
 
-pub async fn read_discover_output(
-    path: &str,
+pub async fn read_all_store_locations_discover_json<P: AsRef<Path>>(
+    input_path: P,
     min_count: usize,
 ) -> anyhow::Result<HashMap<String, Vec<PointOfInterest>>> {
-    let mut reader = File::open(path).await?;
-    let mut contents = String::new();
-    reader.read_to_string(&mut contents).await?;
-    let locations: Vec<PointOfInterest> = serde_json::from_str(&contents)?;
-    let mut res = HashMap::new();
-    for location in locations {
-        res.entry(location.name.clone())
+    let mut contents = Vec::new();
+    File::open(input_path)
+        .await?
+        .read_to_end(&mut contents)
+        .await?;
+    let pois: Vec<PointOfInterest> = serde_json::from_slice(&contents)?;
+    let mut results = HashMap::new();
+    for poi in pois.into_iter() {
+        results
+            .entry(poi.name.clone())
             .or_insert_with(Vec::new)
-            .push(location);
+            .push(poi);
     }
-    Ok(res
+    Ok(results
         .into_iter()
         .filter(|(_name, locations)| locations.len() >= min_count)
         .collect())
