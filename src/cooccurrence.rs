@@ -243,7 +243,7 @@ async fn read_all_store_locations_discover_sqlite3(
         let mut query = db.prepare(
             "
                 SELECT (name, lat, lon) FROM poi ORDER BY name WHERE name IN (
-                    SELECT name FROM poi WHERE COUNT(*) > ?1 GROUP BY name
+                    SELECT name FROM poi GROUP BY name HAVING COUNT(*) >= ?1
                 )
             ",
         )?;
