@@ -169,7 +169,7 @@ pub async fn read_all_store_locations_discover_sqlite3<P: 'static + Send + AsRef
         let mut res = HashMap::<String, Vec<GeoCoord>>::new();
         let mut query = db.prepare(
             "
-                SELECT (name, lat, lon) FROM poi ORDER BY name WHERE name IN (
+                SELECT name, lat, lon FROM poi WHERE name IN (
                     SELECT name FROM poi GROUP BY name HAVING COUNT(*) >= ?1
                 )
             ",
