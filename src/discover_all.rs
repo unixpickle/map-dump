@@ -141,6 +141,7 @@ fn open_db(db_path: &str) -> rusqlite::Result<rusqlite::Connection> {
         )",
         (),
     )?;
+    db.execute("CREATE INDEX IF NOT EXISTS poi_name ON poi (name)", ())?;
     Ok(db)
 }
 
