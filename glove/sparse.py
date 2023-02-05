@@ -121,9 +121,9 @@ class SparseMatmul:
         for row, col in self._iterate_blocks():
             out_flags = (
                 (all_indices[0] >= row)
-                & (all_indices[0] < row + block_size)
+                & (all_indices[0] < min(row + block_size, self._out_size))
                 & (all_indices[1] >= col)
-                & (all_indices[1] < col + block_size)
+                & (all_indices[1] < min(col + block_size, self._out_size))
             )
             required_indices = all_indices[:, out_flags]
 
