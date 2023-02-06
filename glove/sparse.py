@@ -131,7 +131,9 @@ class SparseMatmul:
             local_indices = required_indices - torch.tensor([row, col])[:, None].to(
                 required_indices
             )
-            block_flat_indices = local_indices[0] * block_cols + local_indices[1]
+            block_flat_indices = (
+                local_indices[0].int() * block_cols + local_indices[1].int()
+            )
             self._block_take_indices.append(block_flat_indices)
             new_out_indices.append(required_indices)
         output_order = torch.cat(new_out_indices, dim=1)
