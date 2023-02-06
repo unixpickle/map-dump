@@ -112,7 +112,7 @@ impl GlobeBounds {
 
     fn rects(&self) -> &'static [GeoBounds] {
         match self {
-            GlobeBounds::Globe => &[GeoBounds(GeoCoord(0.0, -180.0), GeoCoord(90.0, 180.0))],
+            GlobeBounds::Globe => &[GeoBounds(GeoCoord(-90.0, -180.0), GeoCoord(90.0, 180.0))],
             GlobeBounds::USA => &[
                 // main body: https://gist.github.com/graydon/11198540
                 GeoBounds(GeoCoord(24.9493, -125.0011), GeoCoord(49.5904, -66.9326)),
