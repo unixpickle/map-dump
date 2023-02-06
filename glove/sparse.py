@@ -111,6 +111,9 @@ class SparseMatmul:
 
     def __init__(self, output_pattern: SparseMatrix, block_size: int = 2048):
         assert output_pattern.shape[0] == output_pattern.shape[1]
+        assert (
+            block_size**2 < 2**31
+        ), f"block_size {block_size} is too large for integer indices"
         self._block_size = block_size
         self._out_size = output_pattern.shape[0]
 
