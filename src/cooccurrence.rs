@@ -1,5 +1,5 @@
 use crate::array_util::SparseMatrix;
-use crate::bing_maps::MapItem;
+use crate::bing_maps::{MapItem, PointOfInterest};
 use crate::discover::read_all_store_locations_discover_json;
 use crate::discover_all::read_all_store_locations_discover_sqlite3;
 use crate::geo_coord::{GeoCoord, GlobeBounds, VecGeoCoord};
@@ -206,7 +206,11 @@ pub async fn read_all_store_locations<P: AsRef<Path>>(
     let all_results = if metadata(&src).await?.is_dir() {
         read_all_store_locations_scrape(&src.as_ref().to_owned()).await?
     } else {
-        read_all_store_locations_discover(&src.as_ref().to_owned(), min_count).await?
+        read_all_store_locations_discover(&src.as_ref().to_owned(), min_count)
+            .await?
+            .into_iter()
+            .map(|(name, pois)| (name, pois.into_iter().map(|poi| poi.location).collect()))
+            .collect()
     };
     Ok(all_results
         .into_iter()
@@ -223,22 +227,18 @@ pub async fn read_all_store_locations<P: AsRef<Path>>(
         .collect())
 }
 
-async fn read_all_store_locations_discover(
-    input_path: &PathBuf,
+pub async fn read_all_store_locations_discover<P: AsRef<Path>>(
+    input_path: P,
     min_count: usize,
-) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
-    if is_sqlite3_file(input_path).await? {
-        read_all_store_locations_discover_sqlite3(input_path.clone(), min_count).await
+) -> anyhow::Result<HashMap<String, Vec<PointOfInterest>>> {
+    if is_sqlite3_file(input_path.as_ref()).await? {
+        read_all_store_locations_discover_sqlite3(input_path.as_ref().to_owned(), min_count).await
     } else {
-        let pois = read_all_store_locations_discover_json(input_path, min_count).await?;
-        Ok(pois
-            .into_iter()
-            .map(|(name, pois)| (name, pois.into_iter().map(|poi| poi.location).collect()))
-            .collect())
+        read_all_store_locations_discover_json(input_path, min_count).await
     }
 }
 
-async fn is_sqlite3_file(input_path: &PathBuf) -> std::io::Result<bool> {
+async fn is_sqlite3_file(input_path: &Path) -> std::io::Result<bool> {
     let mut contents: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     match File::open(input_path)
         .await?

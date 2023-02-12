@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::bing_maps::{Client, Tile};
+use crate::bing_maps::{Client, PointOfInterest, Tile};
 use crate::discover::fetch_results;
 use crate::geo_coord::GeoCoord;
 use crate::task_queue::TaskQueue;
@@ -163,26 +163,31 @@ fn db_seen_tiles(db_path: &str) -> rusqlite::Result<Vec<Tile>> {
 pub async fn read_all_store_locations_discover_sqlite3<P: 'static + Send + AsRef<Path>>(
     p: P,
     min_count: usize,
-) -> anyhow::Result<HashMap<String, Vec<GeoCoord>>> {
+) -> anyhow::Result<HashMap<String, Vec<PointOfInterest>>> {
     spawn_blocking(move || {
         let db = rusqlite::Connection::open(p)?;
-        let mut res = HashMap::<String, Vec<GeoCoord>>::new();
+        let mut res = HashMap::<String, Vec<PointOfInterest>>::new();
         let mut query = db.prepare(
             "
-                SELECT name, lat, lon FROM poi WHERE name IN (
+                SELECT * FROM poi WHERE name IN (
                     SELECT name FROM poi GROUP BY name HAVING COUNT(*) >= ?1
                 )
             ",
         )?;
         let results = query.query_map((min_count,), |row| {
+            let id = row.get::<_, String>("id")?;
             let name = row.get::<_, String>("name")?;
             let lat = row.get::<_, f64>("lat")?;
             let lon = row.get::<_, f64>("lon")?;
-            Ok((name, lat, lon))
+            Ok(PointOfInterest {
+                id,
+                name,
+                location: GeoCoord(lat, lon),
+            })
         })?;
-        for item in results {
-            let (name, lat, lon) = item?;
-            res.entry(name).or_default().push(GeoCoord(lat, lon));
+        for poi in results {
+            let poi = poi?;
+            res.entry(poi.name.clone()).or_default().push(poi);
         }
         Ok(res)
     })

@@ -1,6 +1,6 @@
 use crate::bing_maps::Client;
 use crate::bing_maps::PointOfInterest;
-use crate::discover::read_all_store_locations_discover_json;
+use crate::cooccurrence::read_all_store_locations_discover;
 use crate::task_queue::TaskQueue;
 use clap::Parser;
 use rand::seq::IteratorRandom;
@@ -32,8 +32,7 @@ pub struct CategoriesArgs {
 
 pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
     println!("loading locations...");
-    let locations =
-        read_all_store_locations_discover_json(&cli.discover_out, cli.min_count).await?;
+    let locations = read_all_store_locations_discover(&cli.discover_out, cli.min_count).await?;
     let total_tasks = locations.len();
     let task_queue: TaskQueue<(String, Vec<PointOfInterest>)> = locations.into();
     println!("total locations: {}", total_tasks);
