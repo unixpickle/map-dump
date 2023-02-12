@@ -1,6 +1,7 @@
 use crate::bing_maps::Client;
 use crate::bing_maps::PointOfInterest;
 use crate::cooccurrence::read_all_store_locations_discover;
+use crate::geo_coord::GlobeBounds;
 use crate::task_queue::TaskQueue;
 use clap::Parser;
 use rand::seq::IteratorRandom;
@@ -13,6 +14,9 @@ use tokio::{fs::File, io::AsyncWriteExt, spawn, sync::mpsc::channel};
 pub struct CategoriesArgs {
     #[clap(short, long, value_parser, default_value_t = 5)]
     sample_locations: usize,
+
+    #[clap(short, long, value_parser, default_value_t = GlobeBounds::Globe)]
+    bounds: GlobeBounds,
 
     #[clap(short, long, value_parser, default_value_t = 8)]
     parallelism: u32,
@@ -32,7 +36,21 @@ pub struct CategoriesArgs {
 
 pub async fn categories(cli: CategoriesArgs) -> anyhow::Result<()> {
     println!("loading locations...");
-    let locations = read_all_store_locations_discover(&cli.discover_out, cli.min_count).await?;
+    let locations = read_all_store_locations_discover(&cli.discover_out, cli.min_count)
+        .await?
+        .into_iter()
+        .map(|(name, locations)| {
+            (
+                name,
+                locations
+                    .into_iter()
+                    .filter(|x| cli.bounds.contains(&x.location))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .filter(|(_, locations)| locations.len() >= cli.min_count)
+        .collect::<HashMap<_, _>>();
+
     let total_tasks = locations.len();
     let task_queue: TaskQueue<(String, Vec<PointOfInterest>)> = locations.into();
     println!("total locations: {}", total_tasks);
