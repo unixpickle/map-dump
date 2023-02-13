@@ -42,20 +42,12 @@ class SparseMatrix:
         )
 
     def compact_index_dtype(self) -> "SparseMatrix":
-        if self.indices.max().item() < (1 << 15):
-            return SparseMatrix(
-                shape=self.shape,
-                indices=self.indices.to(torch.int16),
-                values=self.values,
-            )
-        elif self.indices.max().item() < (1 << 31):
-            return SparseMatrix(
-                shape=self.shape,
-                indices=self.indices.to(torch.int32),
-                values=self.values,
-            )
-        else:
-            return self
+        max_idx = self.indices.max().item()
+        return SparseMatrix(
+            shape=self.shape,
+            indices=self.indices.to(dtype_for_max(max_idx)),
+            values=self.values,
+        )
 
     def squared_error(
         self, targets: "SparseMatrix", weights: "SparseMatrix"
@@ -265,7 +257,6 @@ class SparseMatmul:
         int, int, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
     ]:
         with torch.no_grad():
-            out = torch.zeros((), device=m1.device, dtype=torch.float64)
             out_indices = self._output_perm
             for (row, col), take_indices in zip(
                 self._iterate_blocks(), self._block_take_indices
@@ -290,19 +281,32 @@ class SparseMatmul:
 def _output_permutation(
     size: int, dst_indices: torch.Tensor, src_indices: torch.Tensor
 ):
+    dtype = dtype_for_max(dst_indices.shape[1])
+
     # It might seem like there's a lot of memory gymnastics here.
     # This is needed to save memory for dense, large matrices.
     raw_dst = (dst_indices[0].long() * size + dst_indices[1].long()).cpu()
     dst_perm = torch.argsort(raw_dst)
     del raw_dst
-    dst_perm = dst_perm.to(dst_indices)
+    dst_perm = dst_perm.to(device=dst_indices.device, dtype=dtype)
 
     raw_src = (src_indices[0].long() * size + src_indices[1].long()).cpu()
     src_perm = torch.argsort(raw_src)
     del raw_src
-    src_perm = src_perm.to(src_indices)
+    src_perm = src_perm.to(device=src_indices.device)
 
     out_perm = torch.zeros_like(dst_perm)
-    out_perm[src_perm.long()] = dst_perm
+    out_perm[src_perm] = dst_perm
 
     return out_perm
+
+
+def dtype_for_max(max_idx: int) -> torch.dtype:
+    if max_idx < (1 << 7):
+        return torch.int8
+    elif max_idx < (1 << 15):
+        return torch.int16
+    elif max_idx < (1 << 31):
+        return torch.int32
+    else:
+        return torch.int64
