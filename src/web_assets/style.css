@@ -103,6 +103,16 @@ body {
     background-color: white;
 }
 
+#suggestions.empty::after {
+    content: 'No results found.';
+    display: block;
+    padding: 0 10px;
+    font-size: 30px;
+    line-height: 40px;
+    color: #999;
+    background-color: white
+}
+
 .suggestion-cur {
     background-color: #f0f0f0;
 }
